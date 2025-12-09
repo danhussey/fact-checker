@@ -15,13 +15,13 @@ const CONTEXT_WINDOW_MS = 60000; // 60 seconds of context
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
   const [transcript, setTranscript] = useState("");
-  const factCheckQueueRef = useRef<string[]>([]);
+  const factCheckQueueRef = useRef<{ claim: string; context: string }[]>([]);
   const isProcessingRef = useRef(false);
   const processedClaimsRef = useRef<Set<string>>(new Set());
   const transcriptHistoryRef = useRef<TranscriptChunk[]>([]);
 
   // Process a single claim through fact-checking
-  const processFactCheck = useCallback(async (claim: string) => {
+  const processFactCheck = useCallback(async (claim: string, context?: string) => {
     const id = crypto.randomUUID();
 
     // Add to list immediately as loading
@@ -40,7 +40,7 @@ export default function Home() {
       const response = await fetch("/api/fact-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ claim }),
+        body: JSON.stringify({ claim, context }),
       });
 
       if (!response.ok) {
@@ -72,9 +72,9 @@ export default function Home() {
     if (isProcessingRef.current || factCheckQueueRef.current.length === 0) return;
 
     isProcessingRef.current = true;
-    const claim = factCheckQueueRef.current.shift()!;
+    const { claim, context } = factCheckQueueRef.current.shift()!;
 
-    await processFactCheck(claim);
+    await processFactCheck(claim, context);
 
     isProcessingRef.current = false;
 
@@ -123,7 +123,7 @@ export default function Home() {
           const normalizedClaim = claim.toLowerCase().trim();
           if (!processedClaimsRef.current.has(normalizedClaim)) {
             processedClaimsRef.current.add(normalizedClaim);
-            factCheckQueueRef.current.push(claim);
+            factCheckQueueRef.current.push({ claim, context: getRecentContext() });
           }
         });
 
