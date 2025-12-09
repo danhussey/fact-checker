@@ -12,6 +12,7 @@
     "@ai-sdk/openai": "^2.0.80",
     "@ai-sdk/perplexity": "^2.0.21",
     "@ai-sdk/react": "^2.0.109",
+    "@ai-sdk/xai": "^2.0.39",
     "@ducanh2912/next-pwa": "^10.2.9",
     "ai": "^5.0.108",
     "next": "16.0.8",

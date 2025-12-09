@@ -1,50 +1,53 @@
-import { createPerplexity } from "@ai-sdk/perplexity";
+import { xai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
 
-const perplexity = createPerplexity({
-  apiKey: process.env.PERPLEXITY_API_KEY,
-});
-
 const factCheckSchema = z.object({
-  verdict: z.enum(["true", "misleading", "unverified", "false", "contested", "opinion"]),
+  verdict: z.enum(["true", "mostly true", "half true", "mostly false", "false", "unverified"]),
   confidence: z.number().min(1).max(4),
   whatsTrue: z.array(z.string()).max(2),
-  whatsMisleading: z.array(z.string()).max(2),
-  missingContext: z.array(z.string()).max(2),
+  whatsWrong: z.array(z.string()).max(2),
+  context: z.array(z.string()).max(2),
   sources: z.array(z.object({
     name: z.string(),
     url: z.string().optional(),
   })).max(3),
 });
 
-const systemPrompt = `You fact-check claims using web search. Report what the data says.
+const systemPrompt = `You are a brutally honest fact-checker. Your job is to verify claims against data.
 
-VERDICT:
-- "true" - Data supports the claim
-- "false" - Data contradicts the claim
-- "misleading" - Numbers are wrong or misrepresented
-- "unverified" - Cannot find reliable data on this
-- "contested" - Studies show conflicting results
-- "opinion" - This is subjective, not factual
+VERDICT SCALE (pick the most accurate):
+- "true" - The claim is factually accurate
+- "mostly true" - Accurate but minor details off
+- "half true" - Partially accurate, partially wrong
+- "mostly false" - More wrong than right
+- "false" - The claim is factually wrong
+- "unverified" - Cannot find reliable data
 
-CONFIDENCE: 4=multiple sources agree, 3=good sources, 2=limited data, 1=weak/unclear
+CRITICAL RULES:
+1. ANSWER THE ACTUAL CLAIM. If someone claims "X is lower than Y" and data shows X IS lower than Y, that's TRUE - even if you think the framing is unfair.
+2. DO NOT add political balance. You are not an editorial board.
+3. DO NOT mark something "misleading" because you disagree with the implications. Verify the FACTUAL claim.
+4. If the numbers support the claim, it's TRUE. Period.
+5. Put caveats in "context", not in your verdict.
 
-YOUR JOB:
-1. Find the ACTUAL NUMBERS from real sources
-2. Compare them to the claimed numbers
-3. Report what the data shows - don't editorialize or "balance"
-4. If the claim says "5x" and data shows "2x", say that directly
+EXAMPLE:
+Claim: "Group A earns less than Group B on average"
+Data shows: Group A median income $40k, Group B median income $70k
+Verdict: TRUE (because the claim IS factually accurate)
+Context: Can include reasons WHY (education, age, location, etc.)
+
+DO NOT mark this "misleading" just because you want to add context. The claim itself is either true or false.
 
 FORMAT:
-- whatsTrue: Facts that support the claim (with numbers)
-- whatsMisleading: Where the numbers are wrong (show correct numbers)
-- missingContext: Key facts that change interpretation
+- whatsTrue: Evidence supporting the claim
+- whatsWrong: Evidence contradicting the claim (empty if claim is true)
+- context: Additional relevant facts (NOT a place to hedge your verdict)
 
-Be direct. State the numbers. Don't hedge or add unnecessary balance.
-If a claim is wrong, say it's wrong and give the correct figure.
-Sources must have real URLs.`;
+CONFIDENCE: 4=solid data, 3=good sources, 2=limited data, 1=unclear
+
+Be direct. No hedging. No political correctness. Just facts.`;
 
 export async function POST(request: Request) {
   try {
@@ -67,21 +70,20 @@ export async function POST(request: Request) {
 
     debug.factCheck.start(claim);
 
-    // Add timeout to prevent extremely long requests (Perplexity can be slow)
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000); // 45 second timeout
+    const timeout = setTimeout(() => controller.abort(), 45000);
 
     try {
       const result = await generateObject({
-        model: perplexity("sonar-pro"),
+        model: xai("grok-3-fast"),
         schema: factCheckSchema,
         system: systemPrompt,
-        prompt: `Fact-check this claim: "${claim}"`,
+        prompt: `Fact-check this claim. Remember: if the data supports the claim, it's TRUE regardless of how you feel about it.\n\nClaim: "${claim}"`,
         abortSignal: controller.signal,
       });
 
       clearTimeout(timeout);
-      debug.factCheck.done(claim, result.object.verdict);
+      debug.factCheck.done(claim, result.object);
 
       return Response.json(result.object);
     } catch (abortError) {
@@ -93,8 +95,8 @@ export async function POST(request: Request) {
             verdict: "unverified",
             confidence: 1,
             whatsTrue: [],
-            whatsMisleading: [],
-            missingContext: ["Request timed out - try again"],
+            whatsWrong: [],
+            context: ["Request timed out - try again"],
             sources: [],
           }
         );

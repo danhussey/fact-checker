@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { FactCheck } from "@/lib/types";
 import { VerdictBadge, VerdictBadgeLoading } from "./VerdictBadge";
-import { WhatsTrueCard, WhatsMisleadingCard, MissingContextCard } from "./InfoCard";
+import { WhatsTrueCard, WhatsWrongCard, ContextCard } from "./InfoCard";
 import { SourceChip } from "./SourceChip";
 
 interface FactCheckCardProps {
@@ -17,15 +17,15 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
   const hasResult = result !== null;
   const hasDetails = hasResult && (
     result.whatsTrue.length > 0 ||
-    result.whatsMisleading.length > 0 ||
-    result.missingContext.length > 0
+    result.whatsWrong.length > 0 ||
+    result.context.length > 0
   );
 
   // Count indicators for collapsed view
   const counts = hasResult ? {
     true: result.whatsTrue.length,
-    misleading: result.whatsMisleading.length,
-    context: result.missingContext.length,
+    wrong: result.whatsWrong.length,
+    context: result.context.length,
   } : null;
 
   return (
@@ -49,16 +49,16 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
                 confidence={result.confidence as 1 | 2 | 3 | 4}
               />
               {/* Count indicators */}
-              {counts && (counts.true > 0 || counts.misleading > 0 || counts.context > 0) && (
+              {counts && (counts.true > 0 || counts.wrong > 0 || counts.context > 0) && (
                 <div className="flex items-center gap-2 text-xs">
                   {counts.true > 0 && (
                     <span className="text-green-400">✓{counts.true}</span>
                   )}
-                  {counts.misleading > 0 && (
-                    <span className="text-yellow-400">⚠{counts.misleading}</span>
+                  {counts.wrong > 0 && (
+                    <span className="text-red-400">✗{counts.wrong}</span>
                   )}
                   {counts.context > 0 && (
-                    <span className="text-orange-400">+{counts.context}</span>
+                    <span className="text-blue-400">+{counts.context}</span>
                   )}
                 </div>
               )}
@@ -104,8 +104,8 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
       {expanded && hasResult && (
         <div className="px-4 pb-4 border-t border-zinc-800 space-y-3 pt-3">
           <WhatsTrueCard items={result.whatsTrue} />
-          <WhatsMisleadingCard items={result.whatsMisleading} />
-          <MissingContextCard items={result.missingContext} />
+          <WhatsWrongCard items={result.whatsWrong} />
+          <ContextCard items={result.context} />
 
           {/* Sources - tap to expand */}
           {result.sources.length > 0 && (

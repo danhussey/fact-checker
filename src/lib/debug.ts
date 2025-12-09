@@ -42,8 +42,12 @@ export const debug = {
   factCheck: {
     start: (claim: string) =>
       log("debug", "FACT-CHECK", `Checking: "${claim.slice(0, 50)}..."`),
-    done: (claim: string, verdict: string) =>
-      log("info", "FACT-CHECK", `${verdict.toUpperCase()}: "${claim.slice(0, 40)}..."`),
+    done: (claim: string, result: { verdict: string; whatsTrue: string[]; whatsWrong: string[]; context: string[]; confidence: number }) => {
+      log("info", "FACT-CHECK", `${result.verdict.toUpperCase()}: "${claim.slice(0, 40)}..."`);
+      if (result.whatsTrue.length) log("debug", "FACT-CHECK", `  ✓ True: ${result.whatsTrue.join(" | ")}`);
+      if (result.whatsWrong.length) log("debug", "FACT-CHECK", `  ✗ Wrong: ${result.whatsWrong.join(" | ")}`);
+      if (result.context.length) log("debug", "FACT-CHECK", `  → Context: ${result.context.join(" | ")}`);
+    },
     error: (claim: string, err: unknown) =>
       log("error", "FACT-CHECK", `Failed: "${claim.slice(0, 40)}..."`, err),
   },

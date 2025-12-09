@@ -37,22 +37,22 @@ export function WhatsTrueCard({ items }: { items: string[] }) {
   );
 }
 
-export function WhatsMisleadingCard({ items }: { items: string[] }) {
+export function WhatsWrongCard({ items }: { items: string[] }) {
   return (
     <InfoCard
-      title="What's Misleading"
+      title="What's Wrong"
       items={items}
-      colorClass="border-yellow-500/30 bg-yellow-500/5"
+      colorClass="border-red-500/30 bg-red-500/5"
     />
   );
 }
 
-export function MissingContextCard({ items }: { items: string[] }) {
+export function ContextCard({ items }: { items: string[] }) {
   return (
     <InfoCard
-      title="Missing Context"
+      title="Context"
       items={items}
-      colorClass="border-orange-500/30 bg-orange-500/5"
+      colorClass="border-blue-500/30 bg-blue-500/5"
     />
   );
 }
