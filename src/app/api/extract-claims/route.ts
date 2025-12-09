@@ -1,4 +1,4 @@
-import { openai } from "@ai-sdk/openai";
+import { xai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
@@ -120,13 +120,13 @@ export async function POST(request: Request) {
     }
 
     const result = await generateObject({
-      model: openai("gpt-4o-mini"),
+      model: xai("grok-3-fast"),
       schema: claimsSchema,
       system: buildSystemPrompt(checkedClaims),
       prompt,
     });
 
-    console.log("[usage:extract-claims]", { model: "gpt-4o-mini", ...result.usage });
+    console.log("[usage:extract-claims]", { model: "grok-3-fast", ...result.usage });
 
     // Filter valid claims
     let claims = result.object.claims.filter(
