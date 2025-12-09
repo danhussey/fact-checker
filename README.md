@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Fact Checker
 
-## Getting Started
+[![CI](https://github.com/dhussey/fact-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/dhussey/fact-checker/actions/workflows/ci.yml)
+[![Deploy](https://img.shields.io/badge/deploy-vercel-black)](https://fact-checker-theta.vercel.app)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-First, run the development server:
+Real-time fact-checking PWA. Listens to audio, extracts claims, and fact-checks them using AI.
+
+**[Live Demo](https://fact-checker-theta.vercel.app)**
+
+## How It Works
+
+1. Click "Start Listening" to capture audio from your microphone
+2. Speech is transcribed in real-time via OpenAI Whisper
+3. AI extracts fact-checkable claims from the transcript
+4. Each claim is verified and rated (true, false, mostly true, etc.)
+
+## Stack
+
+- **Next.js 16** - App Router
+- **OpenAI Whisper** - Speech-to-text
+- **xAI Grok** - Claim extraction & fact-checking
+- **Vercel AI SDK** - Structured outputs
+- **Vercel** - Deployment
+
+## Quick Start
 
 ```bash
+# Install
+npm install
+
+# Set up environment
+cp .env.local.example .env.local
+# Add your OPENAI_API_KEY and XAI_API_KEY
+
+# Run
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment Variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI API key for Whisper transcription |
+| `XAI_API_KEY` | xAI API key for Grok |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Architecture
 
-## Learn More
+```
+Browser Mic → Whisper → Transcript → Grok (extract) → Grok (verify) → UI
+```
 
-To learn more about Next.js, take a look at the following resources:
+See [REPORT.md](REPORT.md) for detailed technical documentation.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## License
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT
