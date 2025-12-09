@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import Link from "next/link";
 import { useContinuousListener } from "@/hooks/useContinuousListener";
 import { FactCheckCard } from "@/components/FactCheckCard";
 import type { FactCheck, StructuredFactCheck } from "@/lib/types";
@@ -279,6 +280,8 @@ export default function Home() {
       <footer className="shrink-0 px-4 py-3 border-t border-zinc-800">
         <p className="text-xs text-center text-zinc-600">
           Evidence explorer — not a truth machine
+          <span className="mx-2">·</span>
+          <Link href="/privacy" className="hover:text-zinc-400">Privacy</Link>
         </p>
       </footer>
     </main>
