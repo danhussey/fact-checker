@@ -53,6 +53,12 @@ If the transcript repeats or rephrases any of these claims, return EMPTY array.
 
   return `Extract NEW fact-checkable claims from transcripts.
 
+EXPLICIT FACT-CHECK REQUESTS (HIGHEST PRIORITY):
+If someone says "fact check that", "is that true", "check if", "verify that", etc:
+- Extract the claim they want checked from context
+- IGNORE the duplicate list - user explicitly wants this checked
+- Mark with prefix "FORCE:" so we know to bypass dedup
+
 EXTRACT:
 - Statistics and numbers
 - Comparisons with specifics
@@ -66,7 +72,7 @@ HEDGING LANGUAGE - STILL EXTRACT THE CLAIM:
 - "Maybe X" → extract X as a claim
 Strip the hedging, keep the factual assertion.
 
-SKIP only:
+SKIP only (unless explicitly requested):
 - Pure opinions with no factual claim ("we should do better")
 - Future predictions ("it will happen")
 - Truly vague statements (no specifics at all)
@@ -78,7 +84,8 @@ RULES:
 3. BAD: "twice as much as white Australians" (missing subject)
 4. GOOD: "Indigenous Australians receive twice as much funding as white Australians per capita"
 
-Return 0-2 NEW claims only. If nothing NEW, return empty array.`;
+Return 0-2 NEW claims only. If nothing NEW, return empty array.
+For explicit requests, prefix with "FORCE:" to bypass duplicate check.`;
 }
 
 export async function POST(request: Request) {
@@ -124,9 +131,23 @@ export async function POST(request: Request) {
       (c) => typeof c === "string" && c.trim().length > 10
     );
 
-    // Post-filter: remove claims too similar to already-checked ones
+    // Separate forced claims (explicit user requests) from regular claims
+    const forcedClaims: string[] = [];
+    const regularClaims: string[] = [];
+
+    for (const claim of claims) {
+      if (claim.startsWith("FORCE:")) {
+        // Strip prefix and add to forced list (bypass dedup)
+        forcedClaims.push(claim.replace(/^FORCE:\s*/, ""));
+      } else {
+        regularClaims.push(claim);
+      }
+    }
+
+    // Post-filter: remove regular claims too similar to already-checked ones
+    let filteredRegular = regularClaims;
     if (checkedClaims.length > 0) {
-      claims = claims.filter(claim => {
+      filteredRegular = regularClaims.filter(claim => {
         const claimLower = normalizeForComparison(claim);
         // Check for obvious duplicates
         const isDuplicate = checkedClaims.some(checked => {
@@ -149,6 +170,9 @@ export async function POST(request: Request) {
         return !isDuplicate;
       });
     }
+
+    // Combine forced claims (always included) with filtered regular claims
+    claims = [...forcedClaims, ...filteredRegular];
 
     debug.claims.response(claims);
 
