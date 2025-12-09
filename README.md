@@ -1,6 +1,6 @@
 # Fact Checker
 
-[![CI](https://github.com/dhussey/fact-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/dhussey/fact-checker/actions/workflows/ci.yml)
+[![CI](https://github.com/danhussey/fact-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/danhussey/fact-checker/actions/workflows/ci.yml)
 [![Deploy](https://img.shields.io/badge/deploy-vercel-black)](https://fact-checker-theta.vercel.app)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
