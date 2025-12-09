@@ -67,7 +67,15 @@ function getWhisperFilename(mimeType: string, originalName: string): string {
   return "audio.webm";
 }
 
+function getClientIP(request: Request): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+  return request.headers.get("x-real-ip") || "unknown";
+}
+
 export async function POST(request: Request) {
+  const ip = getClientIP(request);
+
   try {
     const formData = await request.formData();
     const audioFile = formData.get("audio") as File | null;
@@ -110,6 +118,8 @@ export async function POST(request: Request) {
     if (isLikelyHallucination(text)) {
       return NextResponse.json({ text: "" });
     }
+
+    console.log("[api:transcribe]", { ip, size: audioFile.size, textLen: text.length });
 
     return NextResponse.json({ text });
   } catch (error) {

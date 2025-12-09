@@ -47,10 +47,23 @@ CONFIDENCE: 4=solid data, 3=good sources, 2=limited data, 1=unclear
 
 Be direct. No essays. Just facts and numbers.`;
 
+function getClientIP(request: Request): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+  return request.headers.get("x-real-ip") || "unknown";
+}
+
+// Sanitize input: strip control characters (except newlines/tabs)
+function sanitizeInput(text: string): string {
+  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
 export async function POST(request: Request) {
+  const ip = getClientIP(request);
+
   try {
     const body = await request.json();
-    const claim = body.claim || body.prompt;
+    let claim = body.claim || body.prompt;
     const context = body.context || "";
 
     if (!claim || typeof claim !== "string") {
@@ -67,6 +80,10 @@ export async function POST(request: Request) {
       );
     }
 
+    // Sanitize input
+    claim = sanitizeInput(claim);
+
+    console.log("[api:fact-check]", { ip, claimLen: claim.length, hasContext: !!context });
     debug.factCheck.start(claim);
 
     const controller = new AbortController();

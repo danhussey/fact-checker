@@ -88,7 +88,15 @@ Return 0-2 NEW claims only. If nothing NEW, return empty array.
 For explicit requests, prefix with "FORCE:" to bypass duplicate check.`;
 }
 
+function getClientIP(request: Request): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+  return request.headers.get("x-real-ip") || "unknown";
+}
+
 export async function POST(request: Request) {
+  const ip = getClientIP(request);
+
   try {
     const body = await request.json();
 
@@ -176,6 +184,7 @@ export async function POST(request: Request) {
     // Combine forced claims (always included) with filtered regular claims
     claims = [...forcedClaims, ...filteredRegular];
 
+    console.log("[api:extract-claims]", { ip, claimsFound: claims.length, textLen: newText.length });
     debug.claims.response(claims);
 
     return Response.json({ claims });
