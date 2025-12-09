@@ -89,6 +89,7 @@ export async function POST(request: Request) {
       });
 
       clearTimeout(timeout);
+      console.log("[usage:fact-check]", { model: "grok-3-fast", ...result.usage });
       debug.factCheck.done(claim, result.object);
 
       return Response.json(result.object);

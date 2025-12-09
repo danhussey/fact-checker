@@ -126,6 +126,8 @@ export async function POST(request: Request) {
       prompt,
     });
 
+    console.log("[usage:extract-claims]", { model: "gpt-4o-mini", ...result.usage });
+
     // Filter valid claims
     let claims = result.object.claims.filter(
       (c) => typeof c === "string" && c.trim().length > 10
