@@ -45,12 +45,12 @@ export interface FactCheck {
   timestamp: Date;
 }
 
-// Verdict display configuration
+// Verdict display configuration - uses CSS variables for theme support
 export const verdictConfig: Record<Verdict, { bg: string; text: string; label: string }> = {
-  "true": { bg: "bg-green-500/20", text: "text-green-400", label: "TRUE" },
-  "mostly true": { bg: "bg-green-500/20", text: "text-green-300", label: "MOSTLY TRUE" },
-  "half true": { bg: "bg-yellow-500/20", text: "text-yellow-400", label: "HALF TRUE" },
-  "mostly false": { bg: "bg-orange-500/20", text: "text-orange-400", label: "MOSTLY FALSE" },
-  "false": { bg: "bg-red-500/20", text: "text-red-400", label: "FALSE" },
-  "unverified": { bg: "bg-zinc-500/20", text: "text-zinc-400", label: "UNVERIFIED" },
+  "true": { bg: "bg-success-bg", text: "text-success", label: "True" },
+  "mostly true": { bg: "bg-success-bg", text: "text-success", label: "Mostly True" },
+  "half true": { bg: "bg-warning-bg", text: "text-warning", label: "Half True" },
+  "mostly false": { bg: "bg-warning-bg", text: "text-warning", label: "Mostly False" },
+  "false": { bg: "bg-error-bg", text: "text-error", label: "False" },
+  "unverified": { bg: "bg-border", text: "text-text-muted", label: "Unverified" },
 };

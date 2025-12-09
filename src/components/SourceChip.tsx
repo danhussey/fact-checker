@@ -1,49 +1,30 @@
 "use client";
 
-import { useState } from "react";
-
 interface SourceChipProps {
   name: string;
   url?: string;
 }
 
 export function SourceChip({ name, url }: SourceChipProps) {
-  const [expanded, setExpanded] = useState(false);
-
   if (!url) {
     return (
-      <span className="px-2 py-1 rounded-md text-xs bg-zinc-800 text-zinc-400">
+      <span className="px-2.5 py-1 rounded-lg text-xs bg-bg-secondary text-text-secondary">
         {name}
       </span>
     );
   }
 
   return (
-    <div className="flex flex-col">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className={`px-2 py-1 rounded-md text-xs transition-colors ${
-          expanded
-            ? "bg-zinc-700 text-zinc-200"
-            : "bg-zinc-800 text-zinc-400 active:bg-zinc-700"
-        }`}
-      >
-        {name}
-        <span className="ml-1 text-zinc-500">{expanded ? "−" : "+"}</span>
-      </button>
-
-      {expanded && (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-1 px-2 py-1.5 rounded-md text-xs bg-blue-500/10 text-blue-400 active:bg-blue-500/20 break-all"
-        >
-          {url.replace(/^https?:\/\//, "").slice(0, 40)}
-          {url.length > 48 ? "..." : ""}
-          <span className="ml-1">↗</span>
-        </a>
-      )}
-    </div>
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-info-bg text-info hover:opacity-80 transition-opacity"
+    >
+      <span>{name}</span>
+      <svg className="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+      </svg>
+    </a>
   );
 }

@@ -21,95 +21,67 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
     result.context.length > 0
   );
 
-  // Count indicators for collapsed view
-  const counts = hasResult ? {
-    true: result.whatsTrue.length,
-    wrong: result.whatsWrong.length,
-    context: result.context.length,
-  } : null;
-
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
-      {/* Header - always visible */}
+    <div
+      className="rounded-2xl bg-surface overflow-hidden transition-shadow duration-200"
+      style={{ boxShadow: "var(--shadow-sm)" }}
+    >
       <button
         onClick={() => hasDetails && setExpanded(!expanded)}
         disabled={!hasDetails}
-        className={`w-full px-4 py-3 text-left transition-colors ${
-          hasDetails ? "hover:bg-zinc-800/50 cursor-pointer" : "cursor-default"
+        className={`w-full px-5 py-4 text-left ${
+          hasDetails ? "hover:bg-surface-hover cursor-pointer" : "cursor-default"
         }`}
       >
-        {/* Top row: Verdict badge or loading */}
+        {/* Top row: Verdict badge and timestamp */}
         <div className="flex items-center justify-between mb-2">
           {isLoading ? (
             <VerdictBadgeLoading />
           ) : hasResult ? (
-            <div className="flex items-center gap-3">
-              <VerdictBadge
-                verdict={result.verdict}
-                confidence={result.confidence as 1 | 2 | 3 | 4}
-              />
-              {/* Count indicators */}
-              {counts && (counts.true > 0 || counts.wrong > 0 || counts.context > 0) && (
-                <div className="flex items-center gap-2 text-xs">
-                  {counts.true > 0 && (
-                    <span className="text-green-400">✓{counts.true}</span>
-                  )}
-                  {counts.wrong > 0 && (
-                    <span className="text-red-400">✗{counts.wrong}</span>
-                  )}
-                  {counts.context > 0 && (
-                    <span className="text-blue-400">+{counts.context}</span>
-                  )}
-                </div>
-              )}
-            </div>
+            <VerdictBadge
+              verdict={result.verdict}
+              confidence={result.confidence as 1 | 2 | 3 | 4}
+            />
           ) : error ? (
-            <span className="px-2.5 py-1 rounded-md text-xs font-bold tracking-wide bg-red-500/20 text-red-400">
-              ERROR
-            </span>
+            <span className="text-xs font-medium text-error">Error</span>
           ) : null}
 
-          {/* Expand icon */}
+          <span className="text-xs text-text-muted">
+            {new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+          </span>
+        </div>
+
+        {/* Claim text */}
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-sm text-text leading-relaxed">
+            {claim}
+          </p>
+
           {hasDetails && (
             <svg
-              className={`shrink-0 w-5 h-5 text-zinc-500 transition-transform ${
+              className={`shrink-0 w-4 h-4 text-text-muted transition-transform duration-200 mt-0.5 ${
                 expanded ? "rotate-180" : ""
               }`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
+              strokeWidth={1.5}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M19 9l-7 7-7-7"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           )}
         </div>
-
-        {/* Claim text */}
-        <p className="text-sm text-white font-medium line-clamp-2">
-          &ldquo;{claim}&rdquo;
-        </p>
-
-        {/* Timestamp */}
-        <p className="text-xs text-zinc-500 mt-1.5">
-          {isLoading ? "Checking..." : new Date(timestamp).toLocaleTimeString()}
-        </p>
       </button>
 
-      {/* Expanded content with visual cards */}
+      {/* Expanded content */}
       {expanded && hasResult && (
-        <div className="px-4 pb-4 border-t border-zinc-800 space-y-3 pt-3">
+        <div className="px-5 pb-5 space-y-3">
           <WhatsTrueCard items={result.whatsTrue} />
           <WhatsWrongCard items={result.whatsWrong} />
           <ContextCard items={result.context} />
 
-          {/* Sources - tap to expand */}
           {result.sources.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-2">
+            <div className="flex flex-wrap gap-2 pt-1">
               {result.sources.map((source, i) => (
                 <SourceChip key={i} name={source.name} url={source.url} />
               ))}
@@ -118,9 +90,8 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
         </div>
       )}
 
-      {/* Error state */}
       {error && (
-        <div className="px-4 pb-3 text-sm text-red-400">
+        <div className="px-5 pb-4 text-sm text-error">
           {error}
         </div>
       )}

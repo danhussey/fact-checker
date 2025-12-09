@@ -11,7 +11,7 @@ const confidenceLabels: Record<1 | 2 | 3 | 4, string> = {
   1: "weak",
   2: "limited",
   3: "good",
-  4: "solid",
+  4: "strong",
 };
 
 export function VerdictBadge({ verdict, confidence }: VerdictBadgeProps) {
@@ -19,18 +19,19 @@ export function VerdictBadge({ verdict, confidence }: VerdictBadgeProps) {
 
   return (
     <span
-      className={`px-2.5 py-1 rounded-md text-xs font-bold tracking-wide ${config.bg} ${config.text}`}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${config.bg} ${config.text}`}
     >
-      {config.label} <span className="opacity-60 font-medium">• {confidenceLabels[confidence]}</span>
+      <span>{config.label}</span>
+      <span className="opacity-50">·</span>
+      <span className="opacity-70">{confidenceLabels[confidence]}</span>
     </span>
   );
 }
 
-// Loading state version
 export function VerdictBadgeLoading() {
   return (
-    <span className="px-2.5 py-1 rounded-md bg-zinc-700 animate-pulse">
-      <span className="text-xs font-bold tracking-wide text-transparent">CHECKING...</span>
+    <span className="inline-flex items-center px-3 py-1.5 rounded-full bg-border animate-pulse">
+      <span className="text-xs font-medium text-text-muted">Checking...</span>
     </span>
   );
 }
