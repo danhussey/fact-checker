@@ -171,6 +171,30 @@ export default function Home() {
         <div className="flex items-center justify-between max-w-2xl mx-auto">
           <h1 className="text-lg font-semibold">Fact Check</h1>
 
+          {/* Connection status */}
+          {listener.connectionStatus !== "idle" && (
+            <div className="flex items-center gap-2 text-xs">
+              {listener.connectionStatus === "connecting" && (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                  <span className="text-yellow-500">Connecting...</span>
+                </>
+              )}
+              {listener.connectionStatus === "connected" && (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  <span className="text-green-500">Connected</span>
+                </>
+              )}
+              {listener.connectionStatus === "error" && (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  <span className="text-red-500">Error</span>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Listen toggle */}
           <button
             onClick={listener.isListening ? listener.stopListening : listener.startListening}
@@ -206,13 +230,18 @@ export default function Home() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Live transcript - shows latest text */}
-        {listener.isListening && transcript && (
+        {/* Live transcript - shows latest text with streaming interim results */}
+        {listener.isListening && (transcript || listener.interimText) && (
           <div className="shrink-0 px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
             <p className="text-xs text-zinc-500 mb-1">Live transcript</p>
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm">
               <span className="text-zinc-600">...</span>
-              {transcript.slice(-120)}
+              <span className="text-zinc-400 animate-fade-in">{transcript.slice(-100)}</span>
+              {listener.interimText && (
+                <span className="text-zinc-500 italic animate-fade-in">
+                  {transcript ? " " : ""}{listener.interimText}
+                </span>
+              )}
             </p>
           </div>
         )}

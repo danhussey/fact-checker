@@ -1,15 +1,20 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import crypto from "crypto";
 
-// Hash IP for privacy while maintaining pattern detection
-function hashIP(ip: string): string {
-  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
+// Hash IP for privacy while maintaining pattern detection (Edge-compatible)
+async function hashIP(ip: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(ip);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+  return hashHex.slice(0, 12);
 }
 
 // Rate limit configuration per endpoint (requests per minute)
 const RATE_LIMITS: Record<string, number> = {
-  "/api/transcribe": 10,      // Most expensive (Whisper)
+  "/api/transcribe": 10,       // Legacy Whisper (fallback)
+  "/api/deepgram-token": 5,    // Token generation (one per session)
   "/api/extract-claims": 30,
   "/api/fact-check": 30,
 };
@@ -82,7 +87,7 @@ function isRateLimited(ip: string, endpoint: string, limit: number): { limited: 
   return { limited: false, retryAfter: 0 };
 }
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Only rate limit API routes
@@ -100,7 +105,7 @@ export function middleware(request: NextRequest) {
   cleanup();
 
   const ip = getClientIP(request);
-  const hashedIP = hashIP(ip);
+  const hashedIP = await hashIP(ip);
   const { limited, retryAfter } = isRateLimited(hashedIP, pathname, limit);
 
   if (limited) {
