@@ -74,12 +74,21 @@ const RATE_LIMITS = {
 IP-based, in-memory sliding window. Returns 429 with `Retry-After` header.
 
 ### Request Logging
-Structured logs for Vercel dashboard:
+Structured logs for Vercel dashboard (IPs are SHA-256 hashed for privacy):
 ```
-[api:fact-check] { ip, claimLen, hasContext }
-[api:transcribe] { ip, size, textLen }
-[rate-limit] { ip, endpoint, retryAfter }
+[api:fact-check] { ip: "a1b2c3d4e5f6", claimLen, hasContext }
+[api:transcribe] { ip: "a1b2c3d4e5f6", size, textLen }
+[rate-limit] { ip: "a1b2c3d4e5f6", endpoint, retryAfter }
 ```
+
+### IP Anonymization
+All IP addresses are hashed before logging or rate-limit tracking:
+```typescript
+function hashIP(ip: string): string {
+  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
+}
+```
+Raw IPs are never stored.
 
 ---
 

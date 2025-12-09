@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import crypto from "crypto";
+
+// Hash IP for privacy while maintaining pattern detection
+function hashIP(ip: string): string {
+  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
+}
 
 // Rate limit configuration per endpoint (requests per minute)
 const RATE_LIMITS: Record<string, number> = {
@@ -94,10 +100,11 @@ export function middleware(request: NextRequest) {
   cleanup();
 
   const ip = getClientIP(request);
-  const { limited, retryAfter } = isRateLimited(ip, pathname, limit);
+  const hashedIP = hashIP(ip);
+  const { limited, retryAfter } = isRateLimited(hashedIP, pathname, limit);
 
   if (limited) {
-    console.log("[rate-limit]", { ip, endpoint: pathname, retryAfter });
+    console.log("[rate-limit]", { ip: hashedIP, endpoint: pathname, retryAfter });
     return new NextResponse(
       JSON.stringify({ error: "Too many requests. Please slow down." }),
       {

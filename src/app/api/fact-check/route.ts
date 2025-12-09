@@ -2,6 +2,7 @@ import { xai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
+import crypto from "crypto";
 
 const factCheckSchema = z.object({
   verdict: z.enum(["true", "mostly true", "half true", "mostly false", "false", "unverified"]),
@@ -53,13 +54,17 @@ function getClientIP(request: Request): string {
   return request.headers.get("x-real-ip") || "unknown";
 }
 
+function hashIP(ip: string): string {
+  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
+}
+
 // Sanitize input: strip control characters (except newlines/tabs)
 function sanitizeInput(text: string): string {
   return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
 }
 
 export async function POST(request: Request) {
-  const ip = getClientIP(request);
+  const ip = hashIP(getClientIP(request));
 
   try {
     const body = await request.json();

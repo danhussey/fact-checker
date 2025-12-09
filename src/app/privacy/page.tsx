@@ -77,8 +77,10 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-lg font-semibold mb-3">Rate Limiting</h2>
             <p className="text-zinc-300">
-              To prevent abuse, we temporarily log IP addresses for rate limiting purposes.
-              These logs are not stored permanently and are only used to enforce fair usage limits.
+              To prevent abuse, we use anonymized (hashed) IP addresses for rate limiting.
+              Your actual IP address is never stored - only a one-way hash that cannot be
+              reversed to identify you. These hashes are temporary and used only to enforce
+              fair usage limits.
             </p>
           </section>
 

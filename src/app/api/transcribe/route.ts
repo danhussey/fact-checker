@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import OpenAI, { toFile } from "openai";
+import crypto from "crypto";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -73,8 +74,12 @@ function getClientIP(request: Request): string {
   return request.headers.get("x-real-ip") || "unknown";
 }
 
+function hashIP(ip: string): string {
+  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
+}
+
 export async function POST(request: Request) {
-  const ip = getClientIP(request);
+  const ip = hashIP(getClientIP(request));
 
   try {
     const formData = await request.formData();

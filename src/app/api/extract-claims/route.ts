@@ -2,6 +2,7 @@ import { xai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
+import crypto from "crypto";
 
 // Stop words to ignore in similarity comparison
 const STOP_WORDS = new Set([
@@ -94,8 +95,12 @@ function getClientIP(request: Request): string {
   return request.headers.get("x-real-ip") || "unknown";
 }
 
+function hashIP(ip: string): string {
+  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
+}
+
 export async function POST(request: Request) {
-  const ip = getClientIP(request);
+  const ip = hashIP(getClientIP(request));
 
   try {
     const body = await request.json();
