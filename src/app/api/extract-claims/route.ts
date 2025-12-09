@@ -3,16 +3,55 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
 
+// Stop words to ignore in similarity comparison
+const STOP_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "must", "shall", "can", "need", "dare",
+  "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+  "into", "through", "during", "before", "after", "above", "below",
+  "between", "under", "again", "further", "then", "once", "here",
+  "there", "when", "where", "why", "how", "all", "each", "few", "more",
+  "most", "other", "some", "such", "no", "nor", "not", "only", "own",
+  "same", "so", "than", "too", "very", "just", "and", "but", "if", "or",
+  "because", "until", "while", "although", "though", "after",
+  "that", "which", "who", "whom", "this", "these", "those", "what",
+  "speaker", "claims", "states", "says", "said", "according", "suggests",
+  "mentioned", "refers", "described", "noted", "indicates", "asserts"
+]);
+
+function normalizeForComparison(text: string): string {
+  return text.toLowerCase()
+    .replace(/[^\w\s]/g, " ")  // Remove punctuation
+    .replace(/\s+/g, " ")       // Normalize whitespace
+    .trim();
+}
+
+function extractContentWords(text: string): Set<string> {
+  return new Set(
+    text.split(/\s+/)
+      .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+  );
+}
+
 const claimsSchema = z.object({
   claims: z.array(z.string()).describe("Array of fact-checkable claims. Empty if none found."),
 });
 
 function buildSystemPrompt(checkedClaims: string[]): string {
   const checkedSection = checkedClaims.length > 0
-    ? `\nALREADY CHECKED - skip these and similar:\n${checkedClaims.map(c => `- "${c}"`).join("\n")}\n`
+    ? `
+
+**CRITICAL: DUPLICATE PREVENTION**
+These claims have ALREADY been fact-checked. DO NOT extract them again, even if rephrased:
+${checkedClaims.map(c => `- "${c}"`).join("\n")}
+
+If the transcript repeats or rephrases any of these claims, return EMPTY array.
+"Indigenous Australians get twice as much" = SAME AS = "They receive 2x funding" = DUPLICATE!
+`
     : "";
 
-  return `Extract fact-checkable claims from transcripts.
+  return `Extract NEW fact-checkable claims from transcripts.
 
 EXTRACT:
 - Statistics and numbers
@@ -20,19 +59,26 @@ EXTRACT:
 - Policy/government claims
 - Historical claims
 
-DO NOT extract:
-- Opinions ("I think", "we should")
-- Predictions
-- Vague statements
-${checkedSection}
-CRITICAL RULES:
-1. Make each claim COMPLETE and SELF-CONTAINED
-2. Use context to fill in missing subjects/objects
-3. If text says "they get twice as much" - figure out WHO from context and include it
-4. BAD: "twice as much as white Australians" (who gets twice?)
-5. GOOD: "Indigenous Australians receive twice as much funding as white Australians per capita"
+HEDGING LANGUAGE - STILL EXTRACT THE CLAIM:
+- "I think X" → extract X as a claim
+- "I've heard that X" → extract X as a claim
+- "Apparently X" → extract X as a claim
+- "Maybe X" → extract X as a claim
+Strip the hedging, keep the factual assertion.
 
-Preserve ALL numbers. Return 0-2 complete claims.`;
+SKIP only:
+- Pure opinions with no factual claim ("we should do better")
+- Future predictions ("it will happen")
+- Truly vague statements (no specifics at all)
+- ANYTHING similar to already-checked claims
+${checkedSection}
+RULES:
+1. Make claims COMPLETE and SELF-CONTAINED
+2. Use context to fill in WHO/WHAT
+3. BAD: "twice as much as white Australians" (missing subject)
+4. GOOD: "Indigenous Australians receive twice as much funding as white Australians per capita"
+
+Return 0-2 NEW claims only. If nothing NEW, return empty array.`;
 }
 
 export async function POST(request: Request) {
@@ -73,9 +119,36 @@ export async function POST(request: Request) {
       prompt,
     });
 
-    const claims = result.object.claims.filter(
+    // Filter valid claims
+    let claims = result.object.claims.filter(
       (c) => typeof c === "string" && c.trim().length > 10
     );
+
+    // Post-filter: remove claims too similar to already-checked ones
+    if (checkedClaims.length > 0) {
+      claims = claims.filter(claim => {
+        const claimLower = normalizeForComparison(claim);
+        // Check for obvious duplicates
+        const isDuplicate = checkedClaims.some(checked => {
+          const checkedLower = normalizeForComparison(checked);
+          // Exact or near-exact match
+          if (claimLower.includes(checkedLower) || checkedLower.includes(claimLower)) {
+            return true;
+          }
+          // Word overlap check (>50% shared content words = duplicate)
+          const claimWords = extractContentWords(claimLower);
+          const checkedWords = extractContentWords(checkedLower);
+          if (claimWords.size === 0 || checkedWords.size === 0) return false;
+          const overlap = [...claimWords].filter(w => checkedWords.has(w)).length;
+          const similarity = overlap / Math.min(claimWords.size, checkedWords.size);
+          return similarity > 0.5;
+        });
+        if (isDuplicate) {
+          debug.claims.skip(`duplicate: "${claim.slice(0, 40)}..."`);
+        }
+        return !isDuplicate;
+      });
+    }
 
     debug.claims.response(claims);
 
