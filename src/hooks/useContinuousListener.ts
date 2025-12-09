@@ -4,6 +4,46 @@ import { useState, useRef, useCallback, useEffect } from "react";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
 
+// Map browser locales to Deepgram language codes
+function getDeepgramLanguage(): string {
+  if (typeof navigator === "undefined") return "en";
+
+  const locale = navigator.language || "en";
+  const lang = locale.toLowerCase();
+
+  // English variants
+  if (lang.startsWith("en-au")) return "en-AU";
+  if (lang.startsWith("en-gb")) return "en-GB";
+  if (lang.startsWith("en-nz")) return "en-NZ";
+  if (lang.startsWith("en-in")) return "en-IN";
+  if (lang.startsWith("en-ie")) return "en-IE";
+  if (lang.startsWith("en-za")) return "en-ZA";
+  if (lang.startsWith("en")) return "en-US";
+
+  // Other languages Deepgram supports
+  const langMap: Record<string, string> = {
+    "zh": "zh",
+    "nl": "nl",
+    "fr": "fr",
+    "de": "de",
+    "hi": "hi",
+    "id": "id",
+    "it": "it",
+    "ja": "ja",
+    "ko": "ko",
+    "pl": "pl",
+    "pt": "pt",
+    "ru": "ru",
+    "es": "es",
+    "sv": "sv",
+    "tr": "tr",
+    "uk": "uk",
+  };
+
+  const baseLang = lang.split("-")[0];
+  return langMap[baseLang] || "en";
+}
+
 interface UseContinuousListenerReturn {
   isListening: boolean;
   transcript: string;
@@ -122,9 +162,12 @@ export function useContinuousListener(
 
       // Build Deepgram WebSocket URL with options
       // Note: Don't specify encoding - let Deepgram auto-detect from the audio stream
+      const detectedLanguage = getDeepgramLanguage();
+      console.log("[transcription] Using language:", detectedLanguage);
+
       const params = new URLSearchParams({
         model: "nova-3",
-        language: "en-AU",
+        language: detectedLanguage,
         smart_format: "true",
         interim_results: "true",
         utterance_end_ms: "1500",

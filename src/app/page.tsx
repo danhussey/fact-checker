@@ -13,6 +13,33 @@ interface TranscriptChunk {
 
 const CONTEXT_WINDOW_MS = 300000; // 5 minutes of context
 
+// Normalize claim for deduplication - handles unit variations, spacing, etc.
+function normalizeClaim(claim: string): string {
+  return claim
+    .toLowerCase()
+    .trim()
+    // Normalize storage units
+    .replace(/\bgigabytes?\b/gi, "gb")
+    .replace(/\bmegabytes?\b/gi, "mb")
+    .replace(/\bterabytes?\b/gi, "tb")
+    .replace(/\bkilobytes?\b/gi, "kb")
+    // Normalize number words
+    .replace(/\bmillion\b/gi, "m")
+    .replace(/\bbillion\b/gi, "b")
+    .replace(/\bthousand\b/gi, "k")
+    // Normalize currency
+    .replace(/\bdollars?\b/gi, "$")
+    .replace(/\bpounds?\b/gi, "£")
+    .replace(/\beuros?\b/gi, "€")
+    // Normalize percentages
+    .replace(/\bpercent\b/gi, "%")
+    .replace(/\bper\s*cent\b/gi, "%")
+    // Remove extra spaces
+    .replace(/\s+/g, " ")
+    // Remove punctuation for comparison
+    .replace(/[.,!?;:'"]/g, "");
+}
+
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
   const [transcript, setTranscript] = useState("");
@@ -20,6 +47,8 @@ export default function Home() {
   const isProcessingRef = useRef(false);
   const processedClaimsRef = useRef<Set<string>>(new Set());
   const transcriptHistoryRef = useRef<TranscriptChunk[]>([]);
+  const pendingTextRef = useRef<string>("");
+  const extractTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Process a single claim through fact-checking
   const processFactCheck = useCallback(async (claim: string, context?: string) => {
@@ -94,21 +123,23 @@ export default function Home() {
     return recentChunks.map(c => c.text).join(" ");
   }, []);
 
-  // Get list of already-checked claims for semantic dedup
+  // Get list of already-checked AND pending claims for dedup
   const getCheckedClaims = useCallback(() => {
-    return factChecks.map(fc => fc.claim);
+    const checked = factChecks.map(fc => fc.claim);
+    const pending = factCheckQueueRef.current.map(item => item.claim);
+    return [...checked, ...pending];
   }, [factChecks]);
 
-  // Extract claims with context awareness
-  const extractAndProcessClaims = useCallback(async (newText: string) => {
-    if (newText.trim().length < 20) return;
+  // Extract claims - called after debounce
+  const doExtractClaims = useCallback(async (textToProcess: string) => {
+    if (textToProcess.trim().length < 20) return;
 
     try {
       const response = await fetch("/api/extract-claims", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          newText,
+          newText: textToProcess,
           recentContext: getRecentContext(),
           checkedClaims: getCheckedClaims(),
         }),
@@ -120,10 +151,10 @@ export default function Home() {
 
       if (claims && claims.length > 0) {
         claims.forEach((claim: string) => {
-          // Avoid exact duplicate claims (semantic dedup handled by API)
-          const normalizedClaim = claim.toLowerCase().trim();
-          if (!processedClaimsRef.current.has(normalizedClaim)) {
-            processedClaimsRef.current.add(normalizedClaim);
+          // Normalize to catch variations like "256 gigabytes" vs "256 GB"
+          const normalized = normalizeClaim(claim);
+          if (!processedClaimsRef.current.has(normalized)) {
+            processedClaimsRef.current.add(normalized);
             factCheckQueueRef.current.push({ claim, context: getRecentContext() });
           }
         });
@@ -134,6 +165,26 @@ export default function Home() {
       console.error("Claim extraction error:", error);
     }
   }, [processQueue, getRecentContext, getCheckedClaims]);
+
+  // Debounced claim extraction - batches rapid transcript chunks
+  const extractAndProcessClaims = useCallback((newText: string) => {
+    // Accumulate text
+    pendingTextRef.current = pendingTextRef.current
+      ? `${pendingTextRef.current} ${newText}`
+      : newText;
+
+    // Clear existing timeout
+    if (extractTimeoutRef.current) {
+      clearTimeout(extractTimeoutRef.current);
+    }
+
+    // Wait 1.5s for more text before extracting
+    extractTimeoutRef.current = setTimeout(() => {
+      const textToProcess = pendingTextRef.current;
+      pendingTextRef.current = "";
+      doExtractClaims(textToProcess);
+    }, 1500);
+  }, [doExtractClaims]);
 
   // Handle new transcript chunks
   const handleTranscript = useCallback((text: string) => {
@@ -171,31 +222,7 @@ export default function Home() {
         <div className="flex items-center justify-between max-w-2xl mx-auto">
           <h1 className="text-lg font-semibold">Fact Check</h1>
 
-          {/* Connection status */}
-          {listener.connectionStatus !== "idle" && (
-            <div className="flex items-center gap-2 text-xs">
-              {listener.connectionStatus === "connecting" && (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
-                  <span className="text-yellow-500">Connecting...</span>
-                </>
-              )}
-              {listener.connectionStatus === "connected" && (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-green-500" />
-                  <span className="text-green-500">Connected</span>
-                </>
-              )}
-              {listener.connectionStatus === "error" && (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-red-500" />
-                  <span className="text-red-500">Error</span>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Listen toggle */}
+          {/* Listen toggle with integrated status */}
           <button
             onClick={listener.isListening ? listener.stopListening : listener.startListening}
             className={`
@@ -210,10 +237,22 @@ export default function Home() {
             {listener.isListening ? (
               <>
                 <span className="relative flex h-3 w-3">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
+                  {listener.connectionStatus === "connecting" && (
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-yellow-500 animate-pulse" />
+                  )}
+                  {listener.connectionStatus === "connected" && (
+                    <>
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500" />
+                    </>
+                  )}
+                  {listener.connectionStatus === "error" && (
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
+                  )}
                 </span>
-                Listening...
+                {listener.connectionStatus === "connecting" && "Connecting..."}
+                {listener.connectionStatus === "connected" && "Listening"}
+                {listener.connectionStatus === "error" && "Error"}
               </>
             ) : (
               <>
