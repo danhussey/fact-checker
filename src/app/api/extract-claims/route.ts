@@ -1,75 +1,87 @@
-import { createPerplexity } from "@ai-sdk/perplexity";
-import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { generateObject } from "ai";
+import { z } from "zod";
+import { debug } from "@/lib/debug";
 
-const perplexity = createPerplexity({
-  apiKey: process.env.PERPLEXITY_API_KEY,
+const claimsSchema = z.object({
+  claims: z.array(z.string()).describe("Array of fact-checkable claims. Empty if none found."),
 });
 
-const systemPrompt = `You are a claim extractor. Given a transcript of speech, identify any factual claims that could be fact-checked.
+function buildSystemPrompt(checkedClaims: string[]): string {
+  const checkedSection = checkedClaims.length > 0
+    ? `\nALREADY CHECKED - skip these and similar:\n${checkedClaims.map(c => `- "${c}"`).join("\n")}\n`
+    : "";
 
-A fact-checkable claim is:
-- A statement presented as fact (not opinion)
-- Something that can be verified with evidence
-- Specific enough to research
+  return `Extract fact-checkable claims from transcripts.
 
-NOT fact-checkable:
-- Pure opinions ("I think pizza is the best food")
-- Questions
+EXTRACT:
+- Statistics and numbers
+- Comparisons with specifics
+- Policy/government claims
+- Historical claims
+
+DO NOT extract:
+- Opinions ("I think", "we should")
+- Predictions
 - Vague statements
-- Personal experiences ("I went to the store yesterday")
+${checkedSection}
+CRITICAL RULES:
+1. Make each claim COMPLETE and SELF-CONTAINED
+2. Use context to fill in missing subjects/objects
+3. If text says "they get twice as much" - figure out WHO from context and include it
+4. BAD: "twice as much as white Australians" (who gets twice?)
+5. GOOD: "Indigenous Australians receive twice as much funding as white Australians per capita"
 
-For each claim found, extract it as a clear, standalone statement.
-
-Respond with a JSON array of claims. If no fact-checkable claims are found, return an empty array.
-
-Example input: "The Earth is flat and NASA has been lying to us. I really hate how cold it is today."
-Example output: ["The Earth is flat", "NASA has been lying about the shape of Earth"]
-
-Example input: "How are you doing today? I think it might rain."
-Example output: []
-
-IMPORTANT: Only return the JSON array, nothing else. No markdown, no explanation.`;
+Preserve ALL numbers. Return 0-2 complete claims.`;
+}
 
 export async function POST(request: Request) {
   try {
-    const { text } = await request.json();
+    const body = await request.json();
 
-    if (!text || typeof text !== "string") {
+    // Support both old format (just text) and new format (with context)
+    const newText = body.newText || body.text || "";
+    const recentContext = body.recentContext || "";
+    const checkedClaims: string[] = body.checkedClaims || [];
+
+    debug.claims.request(newText, recentContext, checkedClaims);
+
+    if (!newText || typeof newText !== "string") {
+      debug.claims.skip("no text");
       return Response.json({ claims: [] });
     }
 
     // Skip very short text
-    if (text.trim().length < 10) {
+    if (newText.trim().length < 10) {
+      debug.claims.skip("text too short");
       return Response.json({ claims: [] });
     }
 
-    const result = await generateText({
-      model: perplexity("sonar"),
-      system: systemPrompt,
-      prompt: `Extract fact-checkable claims from this transcript:\n\n"${text}"`,
+    // Build prompt with context - combine them so the model sees full conversation
+    let prompt = "";
+    if (recentContext && recentContext.trim()) {
+      // Combine context + new text into one flowing transcript
+      prompt = `TRANSCRIPT (analyze the WHOLE thing, especially the end):\n"${recentContext} ${newText}"\n\nFocus on claims in the recent/final part, but use earlier context to make claims complete.`;
+    } else {
+      prompt = `TRANSCRIPT:\n"${newText}"`;
+    }
+
+    const result = await generateObject({
+      model: openai("gpt-4o-mini"),
+      schema: claimsSchema,
+      system: buildSystemPrompt(checkedClaims),
+      prompt,
     });
 
-    try {
-      // Try to parse the response as JSON
-      let claims: string[] = [];
-      const responseText = result.text.trim();
+    const claims = result.object.claims.filter(
+      (c) => typeof c === "string" && c.trim().length > 10
+    );
 
-      // Handle potential markdown code blocks
-      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        claims = JSON.parse(jsonMatch[0]);
-      }
+    debug.claims.response(claims);
 
-      // Filter out empty or too-short claims
-      claims = claims.filter((c) => typeof c === "string" && c.trim().length > 10);
-
-      return Response.json({ claims });
-    } catch {
-      // If parsing fails, return empty array
-      return Response.json({ claims: [] });
-    }
+    return Response.json({ claims });
   } catch (error) {
-    console.error("Claim extraction error:", error);
+    debug.claims.skip(`error: ${error}`);
     return Response.json({ claims: [] });
   }
 }

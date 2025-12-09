@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { FactCheck } from "@/lib/types";
 import { VerdictBadge, VerdictBadgeLoading } from "./VerdictBadge";
 import { WhatsTrueCard, WhatsMisleadingCard, MissingContextCard } from "./InfoCard";
+import { SourceChip } from "./SourceChip";
 
 interface FactCheckCardProps {
   factCheck: FactCheck;
@@ -20,6 +21,13 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
     result.missingContext.length > 0
   );
 
+  // Count indicators for collapsed view
+  const counts = hasResult ? {
+    true: result.whatsTrue.length,
+    misleading: result.whatsMisleading.length,
+    context: result.missingContext.length,
+  } : null;
+
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
       {/* Header - always visible */}
@@ -35,10 +43,26 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
           {isLoading ? (
             <VerdictBadgeLoading />
           ) : hasResult ? (
-            <VerdictBadge
-              verdict={result.verdict}
-              confidence={result.confidence as 1 | 2 | 3 | 4}
-            />
+            <div className="flex items-center gap-3">
+              <VerdictBadge
+                verdict={result.verdict}
+                confidence={result.confidence as 1 | 2 | 3 | 4}
+              />
+              {/* Count indicators */}
+              {counts && (counts.true > 0 || counts.misleading > 0 || counts.context > 0) && (
+                <div className="flex items-center gap-2 text-xs">
+                  {counts.true > 0 && (
+                    <span className="text-green-400">✓{counts.true}</span>
+                  )}
+                  {counts.misleading > 0 && (
+                    <span className="text-yellow-400">⚠{counts.misleading}</span>
+                  )}
+                  {counts.context > 0 && (
+                    <span className="text-orange-400">+{counts.context}</span>
+                  )}
+                </div>
+              )}
+            </div>
           ) : error ? (
             <span className="px-2.5 py-1 rounded-md text-xs font-bold tracking-wide bg-red-500/20 text-red-400">
               ERROR
@@ -83,26 +107,11 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
           <WhatsMisleadingCard items={result.whatsMisleading} />
           <MissingContextCard items={result.missingContext} />
 
-          {/* Sources */}
+          {/* Sources - tap to expand */}
           {result.sources.length > 0 && (
-            <div className="flex items-center gap-2 pt-2 text-xs text-zinc-500">
-              <span>Sources:</span>
+            <div className="flex flex-wrap gap-2 pt-2">
               {result.sources.map((source, i) => (
-                <span key={i}>
-                  {source.url ? (
-                    <a
-                      href={source.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-zinc-400 hover:text-white transition-colors"
-                    >
-                      {source.name}
-                    </a>
-                  ) : (
-                    <span className="text-zinc-400">{source.name}</span>
-                  )}
-                  {i < result.sources.length - 1 && " • "}
-                </span>
+                <SourceChip key={i} name={source.name} url={source.url} />
               ))}
             </div>
           )}

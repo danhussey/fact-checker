@@ -5,13 +5,20 @@ import { useContinuousListener } from "@/hooks/useContinuousListener";
 import { FactCheckCard } from "@/components/FactCheckCard";
 import type { FactCheck, StructuredFactCheck } from "@/lib/types";
 
+interface TranscriptChunk {
+  text: string;
+  timestamp: number;
+}
+
+const CONTEXT_WINDOW_MS = 60000; // 60 seconds of context
+
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
-  const [processedClaims, setProcessedClaims] = useState<Set<string>>(new Set());
   const [transcript, setTranscript] = useState("");
-  const pendingTextRef = useRef("");
   const factCheckQueueRef = useRef<string[]>([]);
   const isProcessingRef = useRef(false);
+  const processedClaimsRef = useRef<Set<string>>(new Set());
+  const transcriptHistoryRef = useRef<TranscriptChunk[]>([]);
 
   // Process a single claim through fact-checking
   const processFactCheck = useCallback(async (claim: string) => {
@@ -77,15 +84,33 @@ export default function Home() {
     }
   }, [processFactCheck]);
 
-  // Extract claims from accumulated text
-  const extractAndProcessClaims = useCallback(async (text: string) => {
-    if (text.trim().length < 20) return;
+  // Get recent context from transcript history
+  const getRecentContext = useCallback(() => {
+    const now = Date.now();
+    const recentChunks = transcriptHistoryRef.current.filter(
+      chunk => now - chunk.timestamp < CONTEXT_WINDOW_MS
+    );
+    return recentChunks.map(c => c.text).join(" ");
+  }, []);
+
+  // Get list of already-checked claims for semantic dedup
+  const getCheckedClaims = useCallback(() => {
+    return factChecks.map(fc => fc.claim);
+  }, [factChecks]);
+
+  // Extract claims with context awareness
+  const extractAndProcessClaims = useCallback(async (newText: string) => {
+    if (newText.trim().length < 20) return;
 
     try {
       const response = await fetch("/api/extract-claims", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({
+          newText,
+          recentContext: getRecentContext(),
+          checkedClaims: getCheckedClaims(),
+        }),
       });
 
       if (!response.ok) return;
@@ -94,10 +119,10 @@ export default function Home() {
 
       if (claims && claims.length > 0) {
         claims.forEach((claim: string) => {
-          // Avoid duplicate claims
+          // Avoid exact duplicate claims (semantic dedup handled by API)
           const normalizedClaim = claim.toLowerCase().trim();
-          if (!processedClaims.has(normalizedClaim)) {
-            setProcessedClaims((prev) => new Set([...prev, normalizedClaim]));
+          if (!processedClaimsRef.current.has(normalizedClaim)) {
+            processedClaimsRef.current.add(normalizedClaim);
             factCheckQueueRef.current.push(claim);
           }
         });
@@ -107,18 +132,25 @@ export default function Home() {
     } catch (error) {
       console.error("Claim extraction error:", error);
     }
-  }, [processedClaims, processQueue]);
+  }, [processQueue, getRecentContext, getCheckedClaims]);
 
   // Handle new transcript chunks
   const handleTranscript = useCallback((text: string) => {
-    pendingTextRef.current += " " + text;
+    const now = Date.now();
+
+    // Add to rolling history
+    transcriptHistoryRef.current.push({ text, timestamp: now });
+
+    // Prune old chunks (older than context window)
+    transcriptHistoryRef.current = transcriptHistoryRef.current.filter(
+      chunk => now - chunk.timestamp < CONTEXT_WINDOW_MS
+    );
+
+    // Update display transcript
     setTranscript((prev) => (prev ? `${prev} ${text}` : text));
 
-    // Extract claims every time we get new text
-    extractAndProcessClaims(pendingTextRef.current);
-
-    // Clear pending text after extraction to avoid re-processing
-    pendingTextRef.current = "";
+    // Extract claims from new text (context provided separately)
+    extractAndProcessClaims(text);
   }, [extractAndProcessClaims]);
 
   const listener = useContinuousListener(handleTranscript);
@@ -173,11 +205,14 @@ export default function Home() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Live transcript (collapsible) */}
+        {/* Live transcript - shows latest text */}
         {listener.isListening && transcript && (
           <div className="shrink-0 px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
             <p className="text-xs text-zinc-500 mb-1">Live transcript</p>
-            <p className="text-sm text-zinc-400 line-clamp-2">{transcript}</p>
+            <p className="text-sm text-zinc-400">
+              <span className="text-zinc-600">...</span>
+              {transcript.slice(-120)}
+            </p>
           </div>
         )}
 

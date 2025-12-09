@@ -23,6 +23,7 @@ export function useContinuousListener(
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const isStoppingRef = useRef(false);
   const mimeTypeRef = useRef<string>("audio/mp4");
+  const startNewRecordingRef = useRef<() => void>(() => {});
 
   const getMimeType = useCallback((): string => {
     if (typeof MediaRecorder === "undefined") return "audio/mp4";
@@ -108,9 +109,9 @@ export function useContinuousListener(
         sendForTranscription(audioBlob);
       }
 
-      // Start a new recording if still listening
+      // Start a new recording if still listening (use ref to avoid stale closure)
       if (!isStoppingRef.current && streamRef.current) {
-        startNewRecording();
+        startNewRecordingRef.current();
       }
     };
 
@@ -121,6 +122,11 @@ export function useContinuousListener(
     mediaRecorderRef.current = mediaRecorder;
     mediaRecorder.start();
   }, [sendForTranscription]);
+
+  // Keep ref in sync with latest callback
+  useEffect(() => {
+    startNewRecordingRef.current = startNewRecording;
+  }, [startNewRecording]);
 
   // Stop current recording (which triggers onstop -> sends for transcription -> starts new recording)
   const cycleRecording = useCallback(() => {
