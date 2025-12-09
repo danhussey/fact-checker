@@ -10,7 +10,7 @@ interface TranscriptChunk {
   timestamp: number;
 }
 
-const CONTEXT_WINDOW_MS = 60000; // 60 seconds of context
+const CONTEXT_WINDOW_MS = 300000; // 5 minutes of context
 
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);

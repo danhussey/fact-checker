@@ -76,7 +76,7 @@ export async function POST(request: Request) {
     let prompt = `Fact-check this claim. Remember: if the data supports the claim, it's TRUE regardless of how you feel about it.\n\nClaim: "${claim}"`;
 
     if (context && context.trim()) {
-      prompt += `\n\nCONVERSATION CONTEXT (what was said before the claim):\n"${context.slice(-1500)}"`;
+      prompt += `\n\nCONVERSATION CONTEXT (what was said before the claim):\n"${context.slice(-8000)}"`;
     }
 
     try {
