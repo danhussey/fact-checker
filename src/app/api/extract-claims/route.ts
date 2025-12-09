@@ -128,13 +128,13 @@ export async function POST(request: Request) {
     }
 
     const result = await generateObject({
-      model: xai("grok-4-1-fast-non-reasoning"),
+      model: xai("grok-3-fast"),
       schema: claimsSchema,
       system: buildSystemPrompt(checkedClaims),
       prompt,
     });
 
-    console.log("[usage:extract-claims]", { model: "grok-4-1-fast", ...result.usage });
+    console.log("[usage:extract-claims]", { model: "grok-3-fast", ...result.usage });
 
     // Filter valid claims
     let claims = result.object.claims.filter(

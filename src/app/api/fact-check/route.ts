@@ -98,7 +98,7 @@ export async function POST(request: Request) {
 
     try {
       const result = await generateObject({
-        model: xai("grok-4-1-fast-non-reasoning"),
+        model: xai("grok-3-fast"),
         schema: factCheckSchema,
         system: systemPrompt,
         prompt,
@@ -106,7 +106,7 @@ export async function POST(request: Request) {
       });
 
       clearTimeout(timeout);
-      console.log("[usage:fact-check]", { model: "grok-4-1-fast", ...result.usage });
+      console.log("[usage:fact-check]", { model: "grok-3-fast", ...result.usage });
       debug.factCheck.done(claim, result.object);
 
       return Response.json(result.object);
