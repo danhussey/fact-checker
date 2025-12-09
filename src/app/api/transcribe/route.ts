@@ -5,6 +5,46 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Known Whisper hallucination patterns when transcribing silence/ambient noise
+const HALLUCINATION_PATTERNS = [
+  /share this video/i,
+  /subscribe to/i,
+  /like and subscribe/i,
+  /bon appetit/i,
+  /thank you for watching/i,
+  /transcribed by/i,
+  /please subscribe/i,
+  /don't forget to/i,
+  /チャンネル登録/,  // Japanese "subscribe"
+  /ご視聴/,          // Japanese "watching"
+  /動画をご覧/,       // Japanese video viewing
+  /ありがとうございます/, // Japanese thanks
+  /お願いします/,     // Japanese please
+  /ごちそうさま/,     // Japanese after eating
+  /😋|📢|🎵|🔔/,      // Emoji spam common in hallucinations
+  /^\d+\.\s*\d+\.\s*\d+/,  // Number sequences "1. 2. 3."
+  /^[\s.…,!?]+$/,    // Just punctuation/whitespace
+];
+
+function isLikelyHallucination(text: string): boolean {
+  const trimmed = text.trim();
+
+  // Very short text is suspicious
+  if (trimmed.length < 5) return true;
+
+  // Check against known patterns
+  for (const pattern of HALLUCINATION_PATTERNS) {
+    if (pattern.test(trimmed)) return true;
+  }
+
+  // High ratio of non-ASCII might be hallucination (unless user is speaking that language)
+  // This catches Japanese/Korean text when we expect English
+  const nonAsciiRatio = (trimmed.match(/[^\x00-\x7F]/g) || []).length / trimmed.length;
+  if (nonAsciiRatio > 0.3 && trimmed.length < 50) return true;
+
+  return false;
+}
+
 // Map browser MIME types to Whisper-supported extensions
 function getWhisperFilename(mimeType: string, originalName: string): string {
   const type = mimeType.toLowerCase();
@@ -47,8 +87,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // Skip very small files (likely empty/silence)
-    if (audioFile.size < 1000) {
+    // Skip small files (likely empty/silence) - increased threshold to reduce hallucinations
+    if (audioFile.size < 8000) {
       return NextResponse.json({ text: "" });
     }
 
@@ -65,9 +105,13 @@ export async function POST(request: Request) {
       response_format: "json",
     });
 
-    return NextResponse.json({
-      text: transcription.text,
-    });
+    // Filter out Whisper hallucinations (common when transcribing silence/ambient noise)
+    const text = transcription.text?.trim() || "";
+    if (isLikelyHallucination(text)) {
+      return NextResponse.json({ text: "" });
+    }
+
+    return NextResponse.json({ text });
   } catch (error) {
     console.error("Transcription error:", error);
 

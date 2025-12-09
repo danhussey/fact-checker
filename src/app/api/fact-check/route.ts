@@ -67,16 +67,40 @@ export async function POST(request: Request) {
 
     debug.factCheck.start(claim);
 
-    const result = await generateObject({
-      model: perplexity("sonar-pro"),
-      schema: factCheckSchema,
-      system: systemPrompt,
-      prompt: `Fact-check this claim: "${claim}"`,
-    });
+    // Add timeout to prevent extremely long requests (Perplexity can be slow)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000); // 45 second timeout
 
-    debug.factCheck.done(claim, result.object.verdict);
+    try {
+      const result = await generateObject({
+        model: perplexity("sonar-pro"),
+        schema: factCheckSchema,
+        system: systemPrompt,
+        prompt: `Fact-check this claim: "${claim}"`,
+        abortSignal: controller.signal,
+      });
 
-    return Response.json(result.object);
+      clearTimeout(timeout);
+      debug.factCheck.done(claim, result.object.verdict);
+
+      return Response.json(result.object);
+    } catch (abortError) {
+      clearTimeout(timeout);
+      if (controller.signal.aborted) {
+        debug.factCheck.error(claim, "Request timed out after 45s");
+        return Response.json(
+          {
+            verdict: "unverified",
+            confidence: 1,
+            whatsTrue: [],
+            whatsMisleading: [],
+            missingContext: ["Request timed out - try again"],
+            sources: [],
+          }
+        );
+      }
+      throw abortError;
+    }
   } catch (error) {
     debug.factCheck.error("unknown", error);
 

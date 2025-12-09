@@ -24,6 +24,9 @@ export function useContinuousListener(
   const isStoppingRef = useRef(false);
   const mimeTypeRef = useRef<string>("audio/mp4");
   const startNewRecordingRef = useRef<() => void>(() => {});
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const hadSpeechRef = useRef(false);
 
   const getMimeType = useCallback((): string => {
     if (typeof MediaRecorder === "undefined") return "audio/mp4";
@@ -45,8 +48,28 @@ export function useContinuousListener(
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || "audio/mp4";
   }, []);
 
+  // Check if audio level indicates speech (not silence)
+  const checkForSpeech = useCallback(() => {
+    if (!analyserRef.current) return false;
+
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteFrequencyData(dataArray);
+
+    // Calculate average volume level
+    const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+
+    // Low threshold - we want to catch speech, server filters hallucinations
+    // Values typically: silence ~0-2, quiet speech ~3-10, normal speech ~10-50+
+    return average > 2;
+  }, []);
+
   // Send audio to server for transcription
-  const sendForTranscription = useCallback(async (audioBlob: Blob) => {
+  const sendForTranscription = useCallback(async (audioBlob: Blob, hadSpeech: boolean) => {
+    // Skip if no speech was detected during this chunk
+    if (!hadSpeech) {
+      return;
+    }
+
     if (audioBlob.size < 5000) {
       // Skip very small chunks (likely silence or too short)
       return;
@@ -89,6 +112,7 @@ export function useContinuousListener(
     if (!streamRef.current || isStoppingRef.current) return;
 
     chunksRef.current = [];
+    hadSpeechRef.current = false;
     const mimeType = mimeTypeRef.current;
 
     const mediaRecorder = new MediaRecorder(streamRef.current, {
@@ -100,13 +124,17 @@ export function useContinuousListener(
       if (event.data.size > 0) {
         chunksRef.current.push(event.data);
       }
+      // Check for speech while recording
+      if (checkForSpeech()) {
+        hadSpeechRef.current = true;
+      }
     };
 
     mediaRecorder.onstop = () => {
       // Combine chunks into a single blob with proper headers
       if (chunksRef.current.length > 0) {
         const audioBlob = new Blob(chunksRef.current, { type: mimeType });
-        sendForTranscription(audioBlob);
+        sendForTranscription(audioBlob, hadSpeechRef.current);
       }
 
       // Start a new recording if still listening (use ref to avoid stale closure)
@@ -120,8 +148,8 @@ export function useContinuousListener(
     };
 
     mediaRecorderRef.current = mediaRecorder;
-    mediaRecorder.start();
-  }, [sendForTranscription]);
+    mediaRecorder.start(500); // Get data every 500ms to check speech more often
+  }, [sendForTranscription, checkForSpeech]);
 
   // Keep ref in sync with latest callback
   useEffect(() => {
@@ -152,6 +180,15 @@ export function useContinuousListener(
 
       streamRef.current = stream;
       mimeTypeRef.current = getMimeType();
+
+      // Set up audio analyser for voice activity detection
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
 
       setIsListening(true);
 
@@ -193,6 +230,13 @@ export function useContinuousListener(
       streamRef.current = null;
     }
 
+    // Clean up audio context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+
     mediaRecorderRef.current = null;
     setIsListening(false);
   }, []);
@@ -209,6 +253,9 @@ export function useContinuousListener(
       }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
       }
     };
   }, []);
