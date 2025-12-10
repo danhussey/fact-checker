@@ -193,10 +193,16 @@ export default function Home() {
     <main className="min-h-screen flex flex-col bg-bg">
       {/* Minimal Header */}
       <header className="shrink-0 pt-6 pb-4 px-6">
-        <div className="max-w-2xl mx-auto">
+        <div className="max-w-2xl mx-auto flex items-center justify-between">
           <h1 className="text-lg font-semibold text-text tracking-tight">
             Fact Check
           </h1>
+          <Link
+            href="/privacy"
+            className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+          >
+            Privacy
+          </Link>
         </div>
       </header>
 
@@ -332,19 +338,11 @@ export default function Home() {
                   </>
                 )}
               </button>
-
-              {/* Footer text */}
-              <p className="text-xs text-text-muted text-center">
-                Evidence explorer — not a truth machine
-                <span className="mx-2">·</span>
-                <Link href="/privacy" className="hover:text-text-secondary transition-colors">
-                  Privacy
-                </Link>
-              </p>
             </div>
           </div>
         </div>
       </div>
+
     </main>
   );
 }
