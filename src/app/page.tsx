@@ -33,7 +33,7 @@ function normalizeClaim(claim: string): string {
     .replace(/[.,!?;:'"]/g, "");
 }
 
-const ENABLE_TEXT_INPUT = process.env.NEXT_PUBLIC_ENABLE_TEXT_INPUT === "true";
+const ENABLE_TEXT_INPUT = true;
 
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
