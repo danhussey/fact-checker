@@ -10,6 +10,18 @@ export interface Source {
 
 export type RecordingState = "idle" | "recording" | "processing";
 
+// Toulmin argument model
+export type Qualifier = "certain" | "probable" | "possible" | "uncertain";
+
+export interface ToulminStructure {
+  claim: string;           // Core assertion (restated clearly)
+  grounds: string[];       // Evidence/data supporting the claim
+  warrant: string;         // The logical principle connecting grounds to claim
+  backing?: string;        // Support for the warrant's validity
+  qualifier: Qualifier;    // Degree of certainty
+  rebuttals?: string[];    // Conditions that would undermine the argument
+}
+
 export interface VoiceRecorderState {
   status: RecordingState;
   duration: number;
@@ -33,6 +45,7 @@ export interface StructuredFactCheck {
   whatsWrong: string[];
   context: string[];
   sources: { name: string; url?: string }[];
+  argument?: ToulminStructure;
 }
 
 // For continuous listening mode - now with structured data

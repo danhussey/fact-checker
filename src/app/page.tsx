@@ -33,9 +33,12 @@ function normalizeClaim(claim: string): string {
     .replace(/[.,!?;:'"]/g, "");
 }
 
+const ENABLE_TEXT_INPUT = process.env.NEXT_PUBLIC_ENABLE_TEXT_INPUT === "true";
+
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
   const [transcript, setTranscript] = useState("");
+  const [textInput, setTextInput] = useState("");
   const factCheckQueueRef = useRef<{ claim: string; context: string }[]>([]);
   const isProcessingRef = useRef(false);
   const processedClaimsRef = useRef<Set<string>>(new Set());
@@ -182,6 +185,15 @@ export default function Home() {
 
   const listener = useContinuousListener(handleTranscript);
 
+  const handleTextSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    const claim = textInput.trim();
+    if (!claim) return;
+
+    processFactCheck(claim);
+    setTextInput("");
+  }, [textInput, processFactCheck]);
+
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (listRef.current && factChecks.length > 0) {
@@ -292,9 +304,31 @@ export default function Home() {
             </div>
           )}
 
-          {/* Mic button area */}
+          {/* Input area */}
           <div className="px-6 py-4">
             <div className="max-w-2xl mx-auto flex flex-col items-center gap-3">
+              {/* Text input (when enabled via flag) */}
+              {ENABLE_TEXT_INPUT && (
+                <form onSubmit={handleTextSubmit} className="w-full flex gap-2">
+                  <input
+                    type="text"
+                    value={textInput}
+                    onChange={(e) => setTextInput(e.target.value)}
+                    placeholder="Enter a claim to fact-check..."
+                    className="flex-1 px-4 py-2.5 rounded-full bg-surface border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-text-secondary transition-colors"
+                    data-testid="claim-input"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!textInput.trim()}
+                    className="px-5 py-2.5 rounded-full bg-text text-bg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+                    data-testid="claim-submit"
+                  >
+                    Check
+                  </button>
+                </form>
+              )}
+
               {/* Main microphone button */}
               <button
                 onClick={listener.isListening ? listener.stopListening : listener.startListening}

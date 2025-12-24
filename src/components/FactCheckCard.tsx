@@ -5,6 +5,7 @@ import type { FactCheck } from "@/lib/types";
 import { VerdictBadge, VerdictBadgeLoading } from "./VerdictBadge";
 import { WhatsTrueCard, WhatsWrongCard, ContextCard } from "./InfoCard";
 import { SourceChip } from "./SourceChip";
+import { ArgumentBreakdown } from "./ArgumentBreakdown";
 
 interface FactCheckCardProps {
   factCheck: FactCheck;
@@ -79,6 +80,8 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
           <WhatsTrueCard items={result.whatsTrue} />
           <WhatsWrongCard items={result.whatsWrong} />
           <ContextCard items={result.context} />
+
+          {result.argument && <ArgumentBreakdown argument={result.argument} />}
 
           {result.sources.length > 0 && (
             <div className="flex flex-wrap gap-2 pt-1">

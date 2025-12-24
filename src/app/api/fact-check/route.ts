@@ -14,6 +14,14 @@ const factCheckSchema = z.object({
     name: z.string(),
     url: z.string().optional(),
   })).max(3),
+  argument: z.object({
+    claim: z.string().describe("The core claim restated clearly"),
+    grounds: z.array(z.string()).max(3).describe("Evidence supporting the claim"),
+    warrant: z.string().describe("The logical principle: why grounds support claim"),
+    backing: z.string().optional().describe("What supports the warrant itself"),
+    qualifier: z.enum(["certain", "probable", "possible", "uncertain"]),
+    rebuttals: z.array(z.string()).max(2).optional().describe("Conditions that would undermine this"),
+  }).optional(),
 });
 
 const systemPrompt = `You are a brutally honest fact-checker. Verify claims against data.
@@ -45,6 +53,15 @@ EXAMPLE BULLET FORMAT:
 Keep each bullet under 15 words. Numbers first, source in parentheses.
 
 CONFIDENCE: 4=solid data, 3=good sources, 2=limited data, 1=unclear
+
+ARGUMENT STRUCTURE (Toulmin Model):
+Also analyze the argument's logical structure:
+- claim: Restate the core assertion clearly and precisely
+- grounds: What evidence/data supports this claim? (max 3 points)
+- warrant: What's the logical principle connecting the grounds to the claim?
+- backing: What supports the warrant itself? (optional - only if relevant)
+- qualifier: How certain is this argument? (certain/probable/possible/uncertain)
+- rebuttals: What conditions would undermine this argument? (optional, max 2)
 
 Be direct. No essays. Just facts and numbers.`;
 
