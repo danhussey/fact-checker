@@ -114,13 +114,13 @@ export async function POST(request: Request) {
 
     if (!newText || typeof newText !== "string") {
       debug.claims.skip("no text");
-      return Response.json({ claims: [], forcedClaims: [] });
+      return Response.json({ claims: [] });
     }
 
     // Skip very short text
     if (newText.trim().length < 10) {
       debug.claims.skip("text too short");
-      return Response.json({ claims: [], forcedClaims: [] });
+      return Response.json({ claims: [] });
     }
 
     // Build prompt with context - combine them so the model sees full conversation
@@ -192,9 +192,9 @@ export async function POST(request: Request) {
     console.log("[api:extract-claims]", { ip, claimsFound: claims.length, textLen: newText.length });
     debug.claims.response(claims);
 
-    return Response.json({ claims, forcedClaims });
+    return Response.json({ claims });
   } catch (error) {
     debug.claims.skip(`error: ${error}`);
-    return Response.json({ claims: [], forcedClaims: [] });
+    return Response.json({ claims: [] });
   }
 }
