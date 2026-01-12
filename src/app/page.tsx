@@ -5,6 +5,13 @@ import Link from "next/link";
 import { useContinuousListener } from "@/hooks/useContinuousListener";
 import { FactCheckCard } from "@/components/FactCheckCard";
 import type { FactCheck, StructuredFactCheck } from "@/lib/types";
+import {
+  claimSimilarityScore,
+  getExtractionDelayMs,
+  isDisputeCue,
+  isExplicitVerifyCue,
+  normalizeClaim,
+} from "@/lib/claimProcessing";
 
 interface TranscriptChunk {
   text: string;
@@ -12,25 +19,35 @@ interface TranscriptChunk {
 }
 
 const CONTEXT_WINDOW_MS = 300000; // 5 minutes of context
+const CLAIM_TTL_MS = 5 * 60 * 1000;
+const CLAIM_SIMILARITY_THRESHOLD = 0.78;
+const CLAIM_DUPLICATE_THRESHOLD = 0.92;
+const MIN_EXTRACT_TEXT_CHARS = 8;
 
-function normalizeClaim(claim: string): string {
-  return claim
-    .toLowerCase()
-    .trim()
-    .replace(/\bgigabytes?\b/gi, "gb")
-    .replace(/\bmegabytes?\b/gi, "mb")
-    .replace(/\bterabytes?\b/gi, "tb")
-    .replace(/\bkilobytes?\b/gi, "kb")
-    .replace(/\bmillion\b/gi, "m")
-    .replace(/\bbillion\b/gi, "b")
-    .replace(/\bthousand\b/gi, "k")
-    .replace(/\bdollars?\b/gi, "$")
-    .replace(/\bpounds?\b/gi, "£")
-    .replace(/\beuros?\b/gi, "€")
-    .replace(/\bpercent\b/gi, "%")
-    .replace(/\bper\s*cent\b/gi, "%")
-    .replace(/\s+/g, " ")
-    .replace(/[.,!?;:'"]/g, "");
+type ClaimStatus = "queued" | "checking" | "done";
+
+interface ClaimRecord {
+  id: string;
+  claim: string;
+  normalized: string;
+  revision: number;
+  status: ClaimStatus;
+  lastUpdatedAt: number;
+  lastCheckedAt?: number;
+  inFlightRevision?: number;
+}
+
+interface QueuedClaim {
+  id: string;
+  claim: string;
+  context: string;
+  revision: number;
+  urgent: boolean;
+}
+
+interface ExtractIntent {
+  hasDispute: boolean;
+  hasExplicitVerify: boolean;
 }
 
 const ENABLE_TEXT_INPUT = true;
@@ -39,32 +56,188 @@ export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
   const [transcript, setTranscript] = useState("");
   const [textInput, setTextInput] = useState("");
-  const factCheckQueueRef = useRef<{ claim: string; context: string }[]>([]);
+  const factCheckQueueRef = useRef<QueuedClaim[]>([]);
+  const claimByIdRef = useRef<Map<string, ClaimRecord>>(new Map());
+  const claimIndexRef = useRef<Map<string, string>>(new Map());
+  const latestClaimIdRef = useRef<string | null>(null);
   const isProcessingRef = useRef(false);
-  const processedClaimsRef = useRef<Set<string>>(new Set());
   const transcriptHistoryRef = useRef<TranscriptChunk[]>([]);
   const pendingTextRef = useRef<string>("");
   const extractTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingIntentRef = useRef<ExtractIntent>({
+    hasDispute: false,
+    hasExplicitVerify: false,
+  });
 
-  const processFactCheck = useCallback(async (claim: string, context?: string) => {
-    const id = crypto.randomUUID();
-
-    setFactChecks((prev) => [
-      {
+  const upsertFactCheckLoading = useCallback((id: string, claim: string) => {
+    setFactChecks((prev) => {
+      const existingIndex = prev.findIndex((fc) => fc.id === id);
+      const entry: FactCheck = {
         id,
         claim,
         result: null,
         isLoading: true,
         timestamp: new Date(),
-      },
-      ...prev,
-    ]);
+      };
+
+      if (existingIndex === -1) {
+        return [entry, ...prev];
+      }
+
+      const existing = prev[existingIndex];
+      const updated: FactCheck = {
+        ...existing,
+        claim,
+        result: null,
+        isLoading: true,
+        error: undefined,
+        timestamp: entry.timestamp,
+      };
+
+      const next = [...prev];
+      next.splice(existingIndex, 1);
+      return [updated, ...next];
+    });
+  }, []);
+
+  const setFactCheckResult = useCallback((id: string, result: StructuredFactCheck) => {
+    setFactChecks((prev) =>
+      prev.map((fc) =>
+        fc.id === id ? { ...fc, result, isLoading: false, error: undefined } : fc
+      )
+    );
+  }, []);
+
+  const setFactCheckError = useCallback((id: string, message: string) => {
+    setFactChecks((prev) =>
+      prev.map((fc) =>
+        fc.id === id ? { ...fc, error: message, isLoading: false } : fc
+      )
+    );
+  }, []);
+
+  const enqueueClaim = useCallback((item: QueuedClaim) => {
+    const queue = factCheckQueueRef.current;
+    const existingIndex = queue.findIndex((queued) => queued.id === item.id);
+    if (existingIndex >= 0) {
+      queue.splice(existingIndex, 1);
+    }
+
+    if (item.urgent) {
+      queue.unshift(item);
+    } else {
+      queue.push(item);
+    }
+  }, []);
+
+  const findSimilarRecord = useCallback((claim: string) => {
+    let best: { record: ClaimRecord; score: number } | null = null;
+    for (const record of claimByIdRef.current.values()) {
+      const score = claimSimilarityScore(claim, record.claim);
+      if (score >= CLAIM_SIMILARITY_THRESHOLD && (!best || score > best.score)) {
+        best = { record, score };
+      }
+    }
+    return best;
+  }, []);
+
+  const queueClaimCheck = useCallback(
+    (claim: string, options: { context: string; urgent?: boolean; forceCheck?: boolean }) => {
+      const { context, urgent = false, forceCheck = false } = options;
+      const normalized = normalizeClaim(claim);
+      const now = Date.now();
+
+      const exactId = claimIndexRef.current.get(normalized);
+      let matchedRecord: ClaimRecord | undefined;
+      let matchScore = 0;
+
+      if (exactId) {
+        matchedRecord = claimByIdRef.current.get(exactId);
+        matchScore = 1;
+      }
+
+      if (!matchedRecord) {
+        const similar = findSimilarRecord(claim);
+        if (similar) {
+          matchedRecord = similar.record;
+          matchScore = similar.score;
+        }
+      }
+
+      if (matchedRecord) {
+        latestClaimIdRef.current = matchedRecord.id;
+
+        const isSameText = matchedRecord.claim.trim() === claim.trim();
+        const isRecentDone = matchedRecord.status === "done"
+          && matchedRecord.lastCheckedAt
+          && now - matchedRecord.lastCheckedAt < CLAIM_TTL_MS;
+
+        if (isRecentDone && !forceCheck && !urgent && matchScore >= CLAIM_DUPLICATE_THRESHOLD) {
+          return;
+        }
+
+        if (matchedRecord.status !== "done" && isSameText && !forceCheck && !urgent) {
+          return;
+        }
+
+        if (!isSameText || forceCheck || urgent || matchedRecord.status === "done") {
+          matchedRecord.revision += 1;
+        }
+
+        matchedRecord.claim = claim;
+        matchedRecord.lastUpdatedAt = now;
+
+        if (normalized !== matchedRecord.normalized) {
+          claimIndexRef.current.delete(matchedRecord.normalized);
+          matchedRecord.normalized = normalized;
+          claimIndexRef.current.set(normalized, matchedRecord.id);
+        }
+
+        matchedRecord.status = "queued";
+        upsertFactCheckLoading(matchedRecord.id, claim);
+        enqueueClaim({
+          id: matchedRecord.id,
+          claim,
+          context,
+          revision: matchedRecord.revision,
+          urgent,
+        });
+        return;
+      }
+
+      const id = crypto.randomUUID();
+      const record: ClaimRecord = {
+        id,
+        claim,
+        normalized,
+        revision: 1,
+        status: "queued",
+        lastUpdatedAt: now,
+      };
+
+      claimByIdRef.current.set(id, record);
+      claimIndexRef.current.set(normalized, id);
+      latestClaimIdRef.current = id;
+      upsertFactCheckLoading(id, claim);
+      enqueueClaim({ id, claim, context, revision: 1, urgent });
+    },
+    [enqueueClaim, findSimilarRecord, upsertFactCheckLoading]
+  );
+
+  const processFactCheck = useCallback(async (item: QueuedClaim) => {
+    const record = claimByIdRef.current.get(item.id);
+    if (!record || record.revision !== item.revision) {
+      return;
+    }
+
+    record.status = "checking";
+    record.inFlightRevision = item.revision;
 
     try {
       const response = await fetch("/api/fact-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ claim, context }),
+        body: JSON.stringify({ claim: item.claim, context: item.context }),
       });
 
       if (!response.ok) {
@@ -72,32 +245,36 @@ export default function Home() {
       }
 
       const result: StructuredFactCheck = await response.json();
+      const current = claimByIdRef.current.get(item.id);
+      if (!current || current.revision !== item.revision) {
+        return;
+      }
 
-      setFactChecks((prev) =>
-        prev.map((fc) =>
-          fc.id === id ? { ...fc, result, isLoading: false } : fc
-        )
-      );
+      current.status = "done";
+      current.lastCheckedAt = Date.now();
+      current.inFlightRevision = undefined;
+      setFactCheckResult(item.id, result);
     } catch (error) {
       console.error("Fact-check error:", error);
-      setFactChecks((prev) =>
-        prev.map((fc) =>
-          fc.id === id
-            ? { ...fc, error: "Failed to fact-check this claim.", isLoading: false }
-            : fc
-        )
-      );
+      const current = claimByIdRef.current.get(item.id);
+      if (!current || current.revision !== item.revision) {
+        return;
+      }
+
+      current.status = "done";
+      current.inFlightRevision = undefined;
+      setFactCheckError(item.id, "Failed to fact-check this claim.");
     }
-  }, []);
+  }, [setFactCheckError, setFactCheckResult]);
 
   const processQueue = useCallback(async () => {
     if (isProcessingRef.current || factCheckQueueRef.current.length === 0) return;
 
     isProcessingRef.current = true;
-    const { claim, context } = factCheckQueueRef.current.shift()!;
-
-    await processFactCheck(claim, context);
-
+    const next = factCheckQueueRef.current.shift();
+    if (next) {
+      await processFactCheck(next);
+    }
     isProcessingRef.current = false;
 
     if (factCheckQueueRef.current.length > 0) {
@@ -114,13 +291,27 @@ export default function Home() {
   }, []);
 
   const getCheckedClaims = useCallback(() => {
-    const checked = factChecks.map(fc => fc.claim);
-    const pending = factCheckQueueRef.current.map(item => item.claim);
-    return [...checked, ...pending];
-  }, [factChecks]);
+    const now = Date.now();
+    const checked = new Set<string>();
 
-  const doExtractClaims = useCallback(async (textToProcess: string) => {
-    if (textToProcess.trim().length < 20) return;
+    claimByIdRef.current.forEach((record) => {
+      if (record.status === "checking" || record.status === "queued") {
+        checked.add(record.claim);
+        return;
+      }
+      if (record.status === "done" && record.lastCheckedAt && now - record.lastCheckedAt < CLAIM_TTL_MS) {
+        checked.add(record.claim);
+      }
+    });
+
+    return [...checked];
+  }, []);
+
+  const doExtractClaims = useCallback(async (textToProcess: string, intent: ExtractIntent) => {
+    const trimmed = textToProcess.trim();
+    if (trimmed.length < MIN_EXTRACT_TEXT_CHARS && !intent.hasDispute && !intent.hasExplicitVerify) {
+      return;
+    }
 
     try {
       const response = await fetch("/api/extract-claims", {
@@ -135,38 +326,62 @@ export default function Home() {
 
       if (!response.ok) return;
 
-      const { claims } = await response.json();
+      const { claims, forcedClaims } = await response.json();
+      const forcedSet = new Set<string>(forcedClaims || []);
+      const context = getRecentContext();
+      let queued = false;
 
       if (claims && claims.length > 0) {
         claims.forEach((claim: string) => {
-          const normalized = normalizeClaim(claim);
-          if (!processedClaimsRef.current.has(normalized)) {
-            processedClaimsRef.current.add(normalized);
-            factCheckQueueRef.current.push({ claim, context: getRecentContext() });
-          }
+          const forceCheck = intent.hasExplicitVerify || forcedSet.has(claim);
+          const urgent = intent.hasDispute || forceCheck;
+          queueClaimCheck(claim, { context, urgent, forceCheck });
+          queued = true;
         });
+      }
 
+      if (!queued && (intent.hasDispute || intent.hasExplicitVerify)) {
+        const latestId = latestClaimIdRef.current;
+        const latestRecord = latestId ? claimByIdRef.current.get(latestId) : undefined;
+        if (latestRecord) {
+          queueClaimCheck(latestRecord.claim, { context, urgent: true, forceCheck: true });
+          queued = true;
+        }
+      }
+
+      if (queued) {
         processQueue();
       }
     } catch (error) {
       console.error("Claim extraction error:", error);
     }
-  }, [processQueue, getRecentContext, getCheckedClaims]);
+  }, [getRecentContext, getCheckedClaims, processQueue, queueClaimCheck]);
 
   const extractAndProcessClaims = useCallback((newText: string) => {
+    const hasDispute = isDisputeCue(newText);
+    const hasExplicitVerify = isExplicitVerifyCue(newText);
+
     pendingTextRef.current = pendingTextRef.current
       ? `${pendingTextRef.current} ${newText}`
       : newText;
+
+    pendingIntentRef.current.hasDispute = pendingIntentRef.current.hasDispute || hasDispute;
+    pendingIntentRef.current.hasExplicitVerify =
+      pendingIntentRef.current.hasExplicitVerify || hasExplicitVerify;
 
     if (extractTimeoutRef.current) {
       clearTimeout(extractTimeoutRef.current);
     }
 
+    const delayMs = getExtractionDelayMs(newText, pendingIntentRef.current.hasExplicitVerify);
+
     extractTimeoutRef.current = setTimeout(() => {
       const textToProcess = pendingTextRef.current;
+      const intent = pendingIntentRef.current;
       pendingTextRef.current = "";
-      doExtractClaims(textToProcess);
-    }, 1500);
+      pendingIntentRef.current = { hasDispute: false, hasExplicitVerify: false };
+      doExtractClaims(textToProcess, intent);
+    }, delayMs);
   }, [doExtractClaims]);
 
   const handleTranscript = useCallback((text: string) => {
@@ -190,9 +405,30 @@ export default function Home() {
     const claim = textInput.trim();
     if (!claim) return;
 
-    processFactCheck(claim);
+    queueClaimCheck(claim, {
+      context: getRecentContext(),
+      urgent: true,
+      forceCheck: true,
+    });
+    processQueue();
     setTextInput("");
-  }, [textInput, processFactCheck]);
+  }, [textInput, queueClaimCheck, processQueue, getRecentContext]);
+
+  useEffect(() => {
+    if (listener.isListening) return;
+    if (!pendingTextRef.current.trim()) return;
+
+    if (extractTimeoutRef.current) {
+      clearTimeout(extractTimeoutRef.current);
+      extractTimeoutRef.current = null;
+    }
+
+    const textToProcess = pendingTextRef.current;
+    const intent = pendingIntentRef.current;
+    pendingTextRef.current = "";
+    pendingIntentRef.current = { hasDispute: false, hasExplicitVerify: false };
+    doExtractClaims(textToProcess, intent);
+  }, [listener.isListening, doExtractClaims]);
 
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
