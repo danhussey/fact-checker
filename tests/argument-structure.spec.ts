@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 // Mock data for controlled testing
 const mockFactCheckResult = {
@@ -25,8 +25,22 @@ const mockFactCheckResult = {
   },
 };
 
+const hasXaiKey = !!process.env.XAI_API_KEY;
+const ARGUMENT_KEY = "fact-checker:show-argument-breakdown";
+const TEXT_INPUT_KEY = "fact-checker:show-text-input";
+
+async function seedSettings(page: Page) {
+  await page.addInitScript((keys: string[]) => {
+    const [argumentKey, textInputKey] = keys;
+    localStorage.setItem(argumentKey, "true");
+    localStorage.setItem(textInputKey, "true");
+  }, [ARGUMENT_KEY, TEXT_INPUT_KEY]);
+}
+
 test.describe("Argument Structure - API Tests", () => {
   test("fact-check API returns Toulmin structure", async ({ request }) => {
+    test.skip(!hasXaiKey, "XAI_API_KEY not set");
+
     const response = await request.post("/api/fact-check", {
       data: { claim: "The Earth is approximately 4.5 billion years old" },
     });
@@ -49,7 +63,7 @@ test.describe("Argument Structure - API Tests", () => {
 });
 
 test.describe("Argument Structure - E2E with Real Components", () => {
-  test("renders FactCheckCard with mocked Toulmin structure", async ({ page }) => {
+  test("renders FactCheckCard with mocked Toulmin structure", async ({ page }, testInfo) => {
     const testClaim = "The speed of light is approximately 300,000 km per second";
 
     // Mock the fact-check API to return controlled Toulmin structure
@@ -61,6 +75,7 @@ test.describe("Argument Structure - E2E with Real Components", () => {
       });
     });
 
+    await seedSettings(page);
     await page.goto("/");
 
     // Use the text input to submit a claim
@@ -88,12 +103,15 @@ test.describe("Argument Structure - E2E with Real Components", () => {
     await expect(page.locator("text=Rebuttals")).toBeVisible();
 
     // Take screenshot
-    await page.screenshot({ path: "tests/e2e-mocked.png", fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath("e2e-mocked.png"), fullPage: true });
   });
 
-  test("full E2E with live API - renders real Toulmin structure", async ({ page }) => {
+  test("full E2E with live API - renders real Toulmin structure", async ({ page }, testInfo) => {
+    test.skip(!hasXaiKey, "XAI_API_KEY not set");
+
     const testClaim = "Water boils at 100 degrees Celsius at sea level";
 
+    await seedSettings(page);
     await page.goto("/");
 
     // Use the text input to submit a claim (hits real API)
@@ -121,7 +139,7 @@ test.describe("Argument Structure - E2E with Real Components", () => {
     await expect(page.locator("text=Warrant (Logic)")).toBeVisible();
 
     // Take screenshot
-    await page.screenshot({ path: "tests/e2e-live.png", fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath("e2e-live.png"), fullPage: true });
 
     console.log("\n=== Live E2E Test Passed ===");
     console.log("Real FactCheckCard rendered with Toulmin structure from live API");

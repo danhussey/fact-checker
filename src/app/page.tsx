@@ -53,6 +53,7 @@ interface ExtractIntent {
 }
 
 const isDev = process.env.NODE_ENV === "development";
+const enableTextInputEnv = process.env.NEXT_PUBLIC_ENABLE_TEXT_INPUT === "true";
 
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
@@ -60,7 +61,7 @@ export default function Home() {
   const [textInput, setTextInput] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
-  const [showTextInput, setShowTextInput] = useState(false);
+  const [showTextInput, setShowTextInput] = useState(isDev && enableTextInputEnv);
   const formRef = useRef<HTMLFormElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const factCheckQueueRef = useRef<QueuedClaim[]>([]);
@@ -571,6 +572,7 @@ export default function Home() {
                 <button
                   type="button"
                   role="switch"
+                  aria-label="Argument structure"
                   aria-checked={showArgumentBreakdown}
                   onClick={() => setShowArgumentBreakdown((prev) => !prev)}
                   className={`relative w-11 h-6 rounded-full transition-colors ${
@@ -595,6 +597,7 @@ export default function Home() {
                   <button
                     type="button"
                     role="switch"
+                    aria-label="Manual claim input"
                     aria-checked={showTextInput}
                     onClick={() => setShowTextInput((prev) => !prev)}
                     className={`relative w-11 h-6 rounded-full transition-colors ${
