@@ -61,6 +61,8 @@ export default function Home() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
   const [showTextInput, setShowTextInput] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const factCheckQueueRef = useRef<QueuedClaim[]>([]);
   const claimByIdRef = useRef<Map<string, ClaimRecord>>(new Map());
   const claimIndexRef = useRef<Map<string, string>>(new Map());
@@ -73,6 +75,17 @@ export default function Home() {
     hasDispute: false,
     hasExplicitVerify: false,
   });
+
+  const resizeTextArea = useCallback(() => {
+    const el = textAreaRef.current;
+    if (!el) return;
+    const maxHeight = 160;
+    el.style.height = "0px";
+    const scrollHeight = el.scrollHeight;
+    const nextHeight = Math.min(scrollHeight, maxHeight);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = scrollHeight > maxHeight ? "auto" : "hidden";
+  }, []);
 
   useEffect(() => {
     try {
@@ -95,6 +108,11 @@ export default function Home() {
       console.warn("Failed to save argument preference.", error);
     }
   }, [showArgumentBreakdown]);
+
+  useEffect(() => {
+    if (!isDev || !showTextInput) return;
+    resizeTextArea();
+  }, [showTextInput, textInput, resizeTextArea]);
 
   useEffect(() => {
     if (!isDev) return;
@@ -489,6 +507,8 @@ export default function Home() {
   }, [factChecks.length]);
 
   const canShowTextInput = isDev && showTextInput;
+  const listenLabel = canShowTextInput ? "Listen" : "Start Listening";
+  const statusLabelClass = canShowTextInput ? "hidden sm:inline" : "";
 
   return (
     <main className="min-h-screen flex flex-col bg-bg">
@@ -685,72 +705,104 @@ export default function Home() {
 
           {/* Input area */}
           <div className="px-6 py-4">
-            <div className="max-w-2xl mx-auto flex flex-col items-center gap-3">
-              {/* Text input (dev-only, toggled in settings) */}
-              {canShowTextInput && (
-                <form onSubmit={handleTextSubmit} className="w-full flex gap-2">
-                  <input
-                    type="text"
-                    value={textInput}
-                    onChange={(e) => setTextInput(e.target.value)}
-                    placeholder="Enter a claim to fact-check..."
-                    className="flex-1 px-4 py-2.5 rounded-full bg-surface border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-text-secondary transition-colors"
-                    data-testid="claim-input"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!textInput.trim()}
-                    className="px-5 py-2.5 rounded-full bg-text text-bg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
-                    data-testid="claim-submit"
+            <div className="max-w-2xl mx-auto w-full">
+              <div className={`flex items-end gap-2 min-w-0 ${canShowTextInput ? "" : "justify-center"}`}>
+                {/* Text input (dev-only, toggled in settings) */}
+                {canShowTextInput && (
+                  <form
+                    ref={formRef}
+                    onSubmit={handleTextSubmit}
+                    className="flex-1 min-w-0 flex items-end gap-2"
                   >
-                    Check
-                  </button>
-                </form>
-              )}
+                    <textarea
+                      ref={textAreaRef}
+                      rows={1}
+                      value={textInput}
+                      onChange={(e) => setTextInput(e.target.value)}
+                      onInput={resizeTextArea}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          formRef.current?.requestSubmit();
+                        }
+                      }}
+                      placeholder="Enter a claim..."
+                      className="flex-1 min-w-0 min-h-[44px] px-4 py-3 rounded-2xl bg-surface border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-text-secondary transition-colors resize-none leading-5 overflow-hidden"
+                      style={{ boxShadow: "var(--shadow-sm)" }}
+                      data-testid="claim-input"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!textInput.trim()}
+                      aria-label="Send claim"
+                      className="h-11 w-11 shrink-0 rounded-full bg-text text-bg flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+                      data-testid="claim-submit"
+                      style={{ boxShadow: "var(--shadow-sm)" }}
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l6 7-6 7" />
+                      </svg>
+                    </button>
+                  </form>
+                )}
 
-              {/* Main microphone button */}
-              <button
-                onClick={listener.isListening ? listener.stopListening : listener.startListening}
-                className={`
-                  flex items-center justify-center gap-2.5 px-6 py-3 rounded-full font-medium text-sm transition-all duration-200
+                {/* Main microphone button */}
+                <button
+                  type="button"
+                  onClick={listener.isListening ? listener.stopListening : listener.startListening}
+                  className={`
+                  flex items-center justify-center gap-2 rounded-full font-medium text-sm transition-all duration-200 whitespace-nowrap
                   ${listener.isListening
                     ? "bg-text text-bg"
                     : "bg-text text-bg hover:opacity-90"
                   }
+                  ${canShowTextInput ? "h-11 w-11 sm:w-auto sm:px-4" : "h-11 px-6"}
                 `}
-                style={{ boxShadow: "var(--shadow-sm)" }}
-              >
-                {listener.isListening ? (
-                  <>
-                    {listener.connectionStatus === "connecting" && (
-                      <>
-                        <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
-                        <span>Connecting</span>
-                      </>
-                    )}
-                    {listener.connectionStatus === "connected" && (
-                      <>
-                        <span className="w-2 h-2 rounded-full bg-error" />
-                        <span>Stop</span>
-                      </>
-                    )}
-                    {listener.connectionStatus === "error" && (
-                      <>
-                        <span className="w-2 h-2 rounded-full bg-error" />
-                        <span>Error</span>
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-                      <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-                    </svg>
-                    <span>Start Listening</span>
-                  </>
-                )}
-              </button>
+                  style={{ boxShadow: "var(--shadow-sm)" }}
+                  aria-label={listener.isListening ? "Stop listening" : "Start listening"}
+                >
+                  {listener.isListening ? (
+                    <>
+                      <svg className="w-4 h-4 sm:hidden" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M6 6h12v12H6z" />
+                      </svg>
+                      {listener.connectionStatus === "connecting" && (
+                        <>
+                          <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
+                          <span className={statusLabelClass}>Connecting</span>
+                        </>
+                      )}
+                      {listener.connectionStatus === "connected" && (
+                        <>
+                          <span className="w-2 h-2 rounded-full bg-error" />
+                          <span className={statusLabelClass}>Stop</span>
+                        </>
+                      )}
+                      {listener.connectionStatus === "error" && (
+                        <>
+                          <span className="w-2 h-2 rounded-full bg-error" />
+                          <span className={statusLabelClass}>Error</span>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+                      </svg>
+                      <span className={statusLabelClass}>{listenLabel}</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
