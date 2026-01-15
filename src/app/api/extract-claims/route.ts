@@ -35,6 +35,69 @@ function extractContentWords(text: string): Set<string> {
   );
 }
 
+const META_APP_PATTERN = /\b(this|the|your|our)\s+(app|tool|system)\b/i;
+const META_PROCESS_PATTERN = /\b(fact[- ]?check(ing)?|check(ing)?|listening|microphone|mic|transcript|transcrib|render|slow|lag|bug|issue|working|processing|speaking|speech|voice)\b/i;
+
+const POSITIVE_COMPARATIVE_WORDS = new Set([
+  "more", "greater", "bigger", "larger", "higher", "heavier", "taller",
+  "longer", "faster", "stronger", "increase", "increases", "increased",
+  "rise", "rises", "rose", "above", "over", "exceed", "exceeds", "exceeded",
+]);
+
+const NEGATIVE_COMPARATIVE_WORDS = new Set([
+  "less", "smaller", "lower", "lighter", "shorter", "slower", "weaker",
+  "decrease", "decreases", "decreased", "drop", "drops", "dropped",
+  "decline", "declines", "declined", "below", "under",
+]);
+
+const NEGATION_WORDS = new Set(["not", "no", "never", "none", "without"]);
+
+function hasNegation(text: string): boolean {
+  return text.split(/\s+/).some((token) => NEGATION_WORDS.has(token));
+}
+
+function comparativePolarity(text: string): number {
+  let score = 0;
+  const tokens = text.split(/\s+/);
+  for (const token of tokens) {
+    if (POSITIVE_COMPARATIVE_WORDS.has(token)) score += 1;
+    if (NEGATIVE_COMPARATIVE_WORDS.has(token)) score -= 1;
+  }
+  if (hasNegation(text)) {
+    score *= -1;
+  }
+  if (score > 0) return 1;
+  if (score < 0) return -1;
+  return 0;
+}
+
+function isLikelyContradiction(a: string, b: string): boolean {
+  const aWords = extractContentWords(a);
+  const bWords = extractContentWords(b);
+  if (aWords.size === 0 || bWords.size === 0) return false;
+  const overlap = [...aWords].filter(w => bWords.has(w)).length;
+  const similarity = overlap / Math.min(aWords.size, bWords.size);
+  if (similarity < 0.5) return false;
+
+  const aPolarity = comparativePolarity(a);
+  const bPolarity = comparativePolarity(b);
+  if (aPolarity !== 0 && bPolarity !== 0) {
+    return aPolarity !== bPolarity;
+  }
+
+  return hasNegation(a) !== hasNegation(b);
+}
+
+function isMetaClaim(claim: string): boolean {
+  const mentionsApp = META_APP_PATTERN.test(claim);
+  const mentionsProcess = META_PROCESS_PATTERN.test(claim);
+  if (mentionsApp && mentionsProcess) return true;
+  if (/\bfact[- ]?check(ing)?\b/i.test(claim) && /\b(working|broken|slow|lag|issue|bug|checking|processing)\b/i.test(claim)) {
+    return true;
+  }
+  return false;
+}
+
 const claimsSchema = z.object({
   claims: z.array(z.string()).describe("Array of fact-checkable claims. Empty if none found."),
 });
@@ -65,6 +128,7 @@ EXTRACT:
 - Comparisons with specifics
 - Policy/government claims
 - Historical claims
+- General comparisons ("X are bigger than Y") even if broad; add "on average" if needed
 
 HEDGING LANGUAGE - STILL EXTRACT THE CLAIM:
 - "I think X" → extract X as a claim
@@ -77,6 +141,7 @@ SKIP only (unless explicitly requested):
 - Pure opinions with no factual claim ("we should do better")
 - Future predictions ("it will happen")
 - Truly vague statements (no specifics at all)
+- Meta statements about this app/tool/system or its claim-checking pipeline
 - ANYTHING similar to already-checked claims
 ${checkedSection}
 RULES:
@@ -84,6 +149,7 @@ RULES:
 2. Use context to fill in WHO/WHAT
 3. BAD: "twice as much as white Australians" (missing subject)
 4. GOOD: "Indigenous Australians receive twice as much funding as white Australians per capita"
+5. If a new statement CONTRADICTS a checked claim, extract it as NEW (not a duplicate)
 
 Return 0-2 NEW claims only. If nothing NEW, return empty array.
 For explicit requests, prefix with "FORCE:" to bypass duplicate check.`;
@@ -145,6 +211,13 @@ export async function POST(request: Request) {
     let claims = result.object.claims.filter(
       (c) => typeof c === "string" && c.trim().length > 10
     );
+    claims = claims.filter((claim) => {
+      if (isMetaClaim(claim)) {
+        debug.claims.skip(`meta: "${claim.slice(0, 40)}..."`);
+        return false;
+      }
+      return true;
+    });
 
     // Separate forced claims (explicit user requests) from regular claims
     const forcedClaims: string[] = [];
@@ -167,6 +240,9 @@ export async function POST(request: Request) {
         // Check for obvious duplicates
         const isDuplicate = checkedClaims.some(checked => {
           const checkedLower = normalizeForComparison(checked);
+          if (isLikelyContradiction(claimLower, checkedLower)) {
+            return false;
+          }
           // Exact or near-exact match
           if (claimLower.includes(checkedLower) || checkedLower.includes(claimLower)) {
             return true;

@@ -23,6 +23,8 @@ const CLAIM_TTL_MS = 5 * 60 * 1000;
 const CLAIM_SIMILARITY_THRESHOLD = 0.78;
 const CLAIM_DUPLICATE_THRESHOLD = 0.92;
 const MIN_EXTRACT_TEXT_CHARS = 8;
+const ARGUMENT_STORAGE_KEY = "fact-checker:show-argument-breakdown";
+const TEXT_INPUT_STORAGE_KEY = "fact-checker:show-text-input";
 
 type ClaimStatus = "queued" | "checking" | "done";
 
@@ -50,12 +52,15 @@ interface ExtractIntent {
   hasExplicitVerify: boolean;
 }
 
-const ENABLE_TEXT_INPUT = true;
+const isDev = process.env.NODE_ENV === "development";
 
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
   const [transcript, setTranscript] = useState("");
   const [textInput, setTextInput] = useState("");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
+  const [showTextInput, setShowTextInput] = useState(false);
   const factCheckQueueRef = useRef<QueuedClaim[]>([]);
   const claimByIdRef = useRef<Map<string, ClaimRecord>>(new Map());
   const claimIndexRef = useRef<Map<string, string>>(new Map());
@@ -68,6 +73,52 @@ export default function Home() {
     hasDispute: false,
     hasExplicitVerify: false,
   });
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(ARGUMENT_STORAGE_KEY);
+      if (stored !== null) {
+        setShowArgumentBreakdown(stored === "true");
+      }
+    } catch (error) {
+      console.warn("Failed to read argument preference.", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        ARGUMENT_STORAGE_KEY,
+        showArgumentBreakdown ? "true" : "false"
+      );
+    } catch (error) {
+      console.warn("Failed to save argument preference.", error);
+    }
+  }, [showArgumentBreakdown]);
+
+  useEffect(() => {
+    if (!isDev) return;
+    try {
+      const stored = localStorage.getItem(TEXT_INPUT_STORAGE_KEY);
+      if (stored !== null) {
+        setShowTextInput(stored === "true");
+      }
+    } catch (error) {
+      console.warn("Failed to read manual input preference.", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isDev) return;
+    try {
+      localStorage.setItem(
+        TEXT_INPUT_STORAGE_KEY,
+        showTextInput ? "true" : "false"
+      );
+    } catch (error) {
+      console.warn("Failed to save manual input preference.", error);
+    }
+  }, [showTextInput]);
 
   const upsertFactCheckLoading = useCallback((id: string, claim: string) => {
     setFactChecks((prev) => {
@@ -437,6 +488,8 @@ export default function Home() {
     }
   }, [factChecks.length]);
 
+  const canShowTextInput = isDev && showTextInput;
+
   return (
     <main className="min-h-screen flex flex-col bg-bg">
       {/* Minimal Header */}
@@ -445,14 +498,101 @@ export default function Home() {
           <h1 className="text-lg font-semibold text-text tracking-tight">
             Fact Check
           </h1>
-          <Link
-            href="/privacy"
-            className="text-xs text-text-muted hover:text-text-secondary transition-colors"
-          >
-            Privacy
-          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(true)}
+              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+            >
+              Settings
+            </button>
+            <Link
+              href="/privacy"
+              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+            >
+              Privacy
+            </Link>
+          </div>
         </div>
       </header>
+
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <button
+            type="button"
+            aria-label="Close settings"
+            onClick={() => setIsSettingsOpen(false)}
+            className="absolute inset-0 bg-black/30"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative w-full max-w-md rounded-t-2xl sm:rounded-2xl bg-surface border border-border overflow-hidden"
+            style={{ boxShadow: "var(--shadow-lg)" }}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h2 className="text-sm font-semibold text-text">Settings</h2>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(false)}
+                className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+              >
+                Close
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm text-text font-medium">Argument structure</p>
+                  <p className="text-xs text-text-muted">
+                    Show the Toulmin breakdown inside results.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={showArgumentBreakdown}
+                  onClick={() => setShowArgumentBreakdown((prev) => !prev)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    showArgumentBreakdown ? "bg-text" : "bg-border-strong"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-bg transition-transform ${
+                      showArgumentBreakdown ? "translate-x-5" : ""
+                    }`}
+                  />
+                </button>
+              </div>
+              {isDev && (
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm text-text font-medium">Manual claim input</p>
+                    <p className="text-xs text-text-muted">
+                      Dev-only input field for quick checks.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={showTextInput}
+                    onClick={() => setShowTextInput((prev) => !prev)}
+                    className={`relative w-11 h-6 rounded-full transition-colors ${
+                      showTextInput ? "bg-text" : "bg-border-strong"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-bg transition-transform ${
+                        showTextInput ? "translate-x-5" : ""
+                      }`}
+                    />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Scrollable Content Area */}
       <div ref={listRef} className="flex-1 overflow-y-auto px-6 pb-48">
@@ -503,7 +643,10 @@ export default function Home() {
                   className="animate-fade-up"
                   style={{ animationDelay: `${index * 50}ms` }}
                 >
-                  <FactCheckCard factCheck={fc} />
+                  <FactCheckCard
+                    factCheck={fc}
+                    showArgumentBreakdown={showArgumentBreakdown}
+                  />
                 </div>
               ))}
             </div>
@@ -543,8 +686,8 @@ export default function Home() {
           {/* Input area */}
           <div className="px-6 py-4">
             <div className="max-w-2xl mx-auto flex flex-col items-center gap-3">
-              {/* Text input (when enabled via flag) */}
-              {ENABLE_TEXT_INPUT && (
+              {/* Text input (dev-only, toggled in settings) */}
+              {canShowTextInput && (
                 <form onSubmit={handleTextSubmit} className="w-full flex gap-2">
                   <input
                     type="text"

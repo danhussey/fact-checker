@@ -9,9 +9,10 @@ import { ArgumentBreakdown } from "./ArgumentBreakdown";
 
 interface FactCheckCardProps {
   factCheck: FactCheck;
+  showArgumentBreakdown?: boolean;
 }
 
-export function FactCheckCard({ factCheck }: FactCheckCardProps) {
+export function FactCheckCard({ factCheck, showArgumentBreakdown = true }: FactCheckCardProps) {
   const [expanded, setExpanded] = useState(false);
 
   const { result, isLoading, error, claim, timestamp } = factCheck;
@@ -81,7 +82,9 @@ export function FactCheckCard({ factCheck }: FactCheckCardProps) {
           <WhatsWrongCard items={result.whatsWrong} />
           <ContextCard items={result.context} />
 
-          {result.argument && <ArgumentBreakdown argument={result.argument} />}
+          {showArgumentBreakdown && result.argument && (
+            <ArgumentBreakdown argument={result.argument} />
+          )}
 
           {result.sources.length > 0 && (
             <div className="flex flex-wrap gap-2 pt-1">
