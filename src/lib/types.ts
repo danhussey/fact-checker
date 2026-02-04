@@ -81,6 +81,47 @@ export interface TokenResponse {
   maxDurationMs: number;
 }
 
+// Research topic types for topical deep research
+export type TopicCategory = 'politics' | 'science' | 'health' | 'economics' | 'social';
+
+export interface ResearchSource {
+  name: string;
+  url?: string;
+  reliability?: string;
+}
+
+export interface Evidence {
+  point: string;
+  source?: string;
+}
+
+export interface ResearchClaim {
+  statement: string;
+  verdict: Verdict;
+  confidence: 1 | 2 | 3 | 4;
+  evidenceFor: Evidence[];
+  evidenceAgainst: Evidence[];
+  sources: ResearchSource[];
+}
+
+export interface ResearchTopic {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  category: TopicCategory;
+  publishedAt: string;
+  updatedAt: string;
+  claims: ResearchClaim[];
+}
+
+export interface TopicListing {
+  slug: string;
+  title: string;
+  category: TopicCategory;
+  claimCount: number;
+}
+
 // Verdict display configuration - uses CSS variables for theme support
 export const verdictConfig: Record<Verdict, { bg: string; text: string; label: string }> = {
   "true": { bg: "bg-success-bg", text: "text-success", label: "True" },

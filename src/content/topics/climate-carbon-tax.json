@@ -1,0 +1,95 @@
+{
+  "id": "topic-002",
+  "slug": "climate-carbon-tax",
+  "title": "Carbon Tax Effectiveness",
+  "summary": "Examination of claims about carbon pricing policies and their effectiveness in reducing emissions and economic impacts.",
+  "category": "economics",
+  "publishedAt": "2025-01-25T00:00:00Z",
+  "updatedAt": "2025-01-25T00:00:00Z",
+  "claims": [
+    {
+      "statement": "Carbon taxes have reduced emissions in countries that implemented them",
+      "verdict": "mostly true",
+      "confidence": 3,
+      "evidenceFor": [
+        {
+          "point": "British Columbia saw 5-15% reduction in fuel consumption after carbon tax implementation",
+          "source": "University of Ottawa Study"
+        },
+        {
+          "point": "Sweden's carbon tax contributed to 25% emissions reduction since 1990",
+          "source": "Swedish Environmental Protection Agency"
+        },
+        {
+          "point": "Meta-analysis of 37 carbon pricing schemes found average 2% annual emission reduction",
+          "source": "Nature Climate Change"
+        }
+      ],
+      "evidenceAgainst": [
+        {
+          "point": "Emission reductions often coincided with other policies, making attribution difficult",
+          "source": "Economic Policy Institute"
+        },
+        {
+          "point": "Some industries relocated emissions rather than reducing them",
+          "source": "Carbon Leakage Report"
+        }
+      ],
+      "sources": [
+        { "name": "Nature Climate Change", "url": "https://nature.com", "reliability": "Peer-reviewed" },
+        { "name": "Swedish EPA", "reliability": "Government data" },
+        { "name": "University of Ottawa", "reliability": "Academic research" }
+      ]
+    },
+    {
+      "statement": "Carbon taxes destroy jobs and harm the economy",
+      "verdict": "mostly false",
+      "confidence": 3,
+      "evidenceFor": [
+        {
+          "point": "Some energy-intensive industries have seen job losses in regions with carbon pricing",
+          "source": "Industry Association Reports"
+        }
+      ],
+      "evidenceAgainst": [
+        {
+          "point": "British Columbia's economy grew faster than the rest of Canada after implementing carbon tax",
+          "source": "Statistics Canada"
+        },
+        {
+          "point": "Revenue recycling (rebates/tax cuts) has offset consumer cost impacts",
+          "source": "IMF Working Paper"
+        },
+        {
+          "point": "Clean energy sectors have created more jobs than lost in fossil fuel industries",
+          "source": "International Energy Agency"
+        }
+      ],
+      "sources": [
+        { "name": "Statistics Canada", "reliability": "Government statistics" },
+        { "name": "IMF", "url": "https://imf.org", "reliability": "International institution" },
+        { "name": "IEA", "url": "https://iea.org", "reliability": "International authority" }
+      ]
+    },
+    {
+      "statement": "A carbon tax of $50 per ton would raise gas prices by about $0.50 per gallon",
+      "verdict": "true",
+      "confidence": 4,
+      "evidenceFor": [
+        {
+          "point": "CO2 emissions from gasoline are approximately 8.89 kg per gallon, making the calculation accurate",
+          "source": "EPA Emissions Factors"
+        },
+        {
+          "point": "Multiple economic analyses confirm this price relationship",
+          "source": "Tax Policy Center"
+        }
+      ],
+      "evidenceAgainst": [],
+      "sources": [
+        { "name": "EPA", "url": "https://epa.gov", "reliability": "Scientific authority" },
+        { "name": "Tax Policy Center", "reliability": "Nonpartisan research" }
+      ]
+    }
+  ]
+}

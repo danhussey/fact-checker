@@ -1,0 +1,103 @@
+{
+  "id": "topic-001",
+  "slug": "ice-shooting-debate",
+  "title": "ICE Shooting Debate",
+  "summary": "Analysis of claims surrounding recent ICE enforcement actions and related incidents, examining accuracy of statements from various sources.",
+  "category": "politics",
+  "publishedAt": "2025-01-25T00:00:00Z",
+  "updatedAt": "2025-01-25T00:00:00Z",
+  "claims": [
+    {
+      "statement": "ICE agents were shot at during a routine enforcement operation",
+      "verdict": "mostly true",
+      "confidence": 3,
+      "evidenceFor": [
+        {
+          "point": "ICE confirmed shots were fired at agents during the operation",
+          "source": "ICE Official Statement"
+        },
+        {
+          "point": "Local police corroborated the incident report",
+          "source": "Police Department Records"
+        }
+      ],
+      "evidenceAgainst": [
+        {
+          "point": "The characterization of 'routine' is disputed; operation involved armed tactical units",
+          "source": "Local News Investigation"
+        }
+      ],
+      "sources": [
+        { "name": "ICE Official Statement", "reliability": "Primary source" },
+        { "name": "Local Police Department", "reliability": "Official records" },
+        { "name": "Reuters", "url": "https://reuters.com", "reliability": "High credibility" }
+      ]
+    },
+    {
+      "statement": "The individual who fired at agents had no prior criminal record",
+      "verdict": "false",
+      "confidence": 4,
+      "evidenceFor": [],
+      "evidenceAgainst": [
+        {
+          "point": "Court records show previous misdemeanor convictions",
+          "source": "County Court Records"
+        },
+        {
+          "point": "Background check revealed prior arrests",
+          "source": "Law Enforcement Database"
+        }
+      ],
+      "sources": [
+        { "name": "Court Records", "reliability": "Official documents" },
+        { "name": "Associated Press", "url": "https://apnews.com", "reliability": "High credibility" }
+      ]
+    },
+    {
+      "statement": "ICE enforcement operations have increased 300% under the current administration",
+      "verdict": "half true",
+      "confidence": 3,
+      "evidenceFor": [
+        {
+          "point": "Arrest numbers have significantly increased compared to previous year",
+          "source": "ICE Annual Report"
+        }
+      ],
+      "evidenceAgainst": [
+        {
+          "point": "The 300% figure applies only to specific categories, not overall operations",
+          "source": "DHS Statistics"
+        },
+        {
+          "point": "Methodology for counting 'operations' changed between administrations",
+          "source": "GAO Report"
+        }
+      ],
+      "sources": [
+        { "name": "ICE Annual Report", "reliability": "Official statistics" },
+        { "name": "DHS", "reliability": "Government source" },
+        { "name": "GAO", "url": "https://gao.gov", "reliability": "Independent oversight" }
+      ]
+    },
+    {
+      "statement": "Community members were not given advance warning of the operation",
+      "verdict": "true",
+      "confidence": 4,
+      "evidenceFor": [
+        {
+          "point": "ICE policy does not require advance community notification for enforcement actions",
+          "source": "ICE Operations Manual"
+        },
+        {
+          "point": "Local officials confirmed they were not informed beforehand",
+          "source": "City Council Statement"
+        }
+      ],
+      "evidenceAgainst": [],
+      "sources": [
+        { "name": "ICE Policy Documents", "reliability": "Official policy" },
+        { "name": "City Council", "reliability": "Local government" }
+      ]
+    }
+  ]
+}

@@ -4,7 +4,9 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useContinuousListener } from "@/hooks/useContinuousListener";
 import { FactCheckCard } from "@/components/FactCheckCard";
-import type { FactCheck, StructuredFactCheck } from "@/lib/types";
+import { TopicChip } from "@/components/TopicChip";
+import type { FactCheck, StructuredFactCheck, TopicListing } from "@/lib/types";
+import { getTopicListings } from "@/lib/research/loader";
 import {
   claimSimilarityScore,
   getExtractionDelayMs,
@@ -74,6 +76,7 @@ export default function Home() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
   const [showTextInput, setShowTextInput] = useState(enableTextInputEnv);
+  const [topics, setTopics] = useState<TopicListing[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const factCheckQueueRef = useRef<QueuedClaim[]>([]);
@@ -98,6 +101,11 @@ export default function Home() {
     const nextHeight = Math.min(scrollHeight, maxHeight);
     el.style.height = `${nextHeight}px`;
     el.style.overflowY = scrollHeight > maxHeight ? "auto" : "hidden";
+  }, []);
+
+  useEffect(() => {
+    // Load topic listings
+    setTopics(getTopicListings());
   }, []);
 
   useEffect(() => {
@@ -661,9 +669,23 @@ export default function Home() {
                     </svg>
                   </div>
                   <p className="text-text font-medium text-lg mb-2">Ready to fact-check</p>
-                  <p className="text-text-muted text-sm max-w-xs">
+                  <p className="text-text-muted text-sm max-w-xs mb-8">
                     Tap the microphone to start listening
                   </p>
+
+                  {/* Topic chips */}
+                  {topics.length > 0 && (
+                    <div className="mt-4 w-full max-w-md">
+                      <p className="text-xs text-text-muted uppercase tracking-wide mb-3 text-center">
+                        Or explore researched topics
+                      </p>
+                      <div className="flex flex-wrap gap-2 justify-center">
+                        {topics.map((topic) => (
+                          <TopicChip key={topic.slug} topic={topic} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>

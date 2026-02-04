@@ -1,0 +1,16 @@
+{
+  "topics": [
+    {
+      "slug": "ice-shooting-debate",
+      "title": "ICE Shooting Debate",
+      "category": "politics",
+      "claimCount": 4
+    },
+    {
+      "slug": "climate-carbon-tax",
+      "title": "Carbon Tax Effectiveness",
+      "category": "economics",
+      "claimCount": 3
+    }
+  ]
+}
