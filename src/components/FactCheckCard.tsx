@@ -10,9 +10,14 @@ import { ArgumentBreakdown } from "./ArgumentBreakdown";
 interface FactCheckCardProps {
   factCheck: FactCheck;
   showArgumentBreakdown?: boolean;
+  showResearchTopics?: boolean;
 }
 
-export function FactCheckCard({ factCheck, showArgumentBreakdown = true }: FactCheckCardProps) {
+export function FactCheckCard({
+  factCheck,
+  showArgumentBreakdown = true,
+  showResearchTopics = true,
+}: FactCheckCardProps) {
   const [expanded, setExpanded] = useState(false);
 
   const { result, isLoading, error, claim, timestamp } = factCheck;
@@ -86,7 +91,7 @@ export function FactCheckCard({ factCheck, showArgumentBreakdown = true }: FactC
             <ArgumentBreakdown argument={result.argument} />
           )}
 
-          {result.sources.length > 0 && (
+          {showResearchTopics && result.sources.length > 0 && (
             <div className="flex flex-wrap gap-2 pt-1">
               {result.sources.map((source, i) => (
                 <SourceChip key={i} name={source.name} url={source.url} />

@@ -54,6 +54,7 @@ interface ExtractIntent {
 
 const isDev = process.env.NODE_ENV === "development";
 const enableTextInputEnv = process.env.NEXT_PUBLIC_ENABLE_TEXT_INPUT === "true";
+const showResearchTopicsEnv = process.env.NEXT_PUBLIC_SHOW_RESEARCH_TOPICS;
 
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
@@ -61,7 +62,7 @@ export default function Home() {
   const [textInput, setTextInput] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
-  const [showTextInput, setShowTextInput] = useState(isDev && enableTextInputEnv);
+  const [showTextInput, setShowTextInput] = useState(enableTextInputEnv);
   const formRef = useRef<HTMLFormElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const factCheckQueueRef = useRef<QueuedClaim[]>([]);
@@ -111,31 +112,29 @@ export default function Home() {
   }, [showArgumentBreakdown]);
 
   useEffect(() => {
-    if (!isDev || !showTextInput) return;
+    if (!showTextInput) return;
     resizeTextArea();
   }, [showTextInput, textInput, resizeTextArea]);
 
   useEffect(() => {
-    if (!isDev) return;
     try {
       const stored = localStorage.getItem(TEXT_INPUT_STORAGE_KEY);
       if (stored !== null) {
         setShowTextInput(stored === "true");
       }
     } catch (error) {
-      console.warn("Failed to read manual input preference.", error);
+      console.warn("Failed to read text input preference.", error);
     }
   }, []);
 
   useEffect(() => {
-    if (!isDev) return;
     try {
       localStorage.setItem(
         TEXT_INPUT_STORAGE_KEY,
         showTextInput ? "true" : "false"
       );
     } catch (error) {
-      console.warn("Failed to save manual input preference.", error);
+      console.warn("Failed to save text input preference.", error);
     }
   }, [showTextInput]);
 
@@ -507,9 +506,10 @@ export default function Home() {
     }
   }, [factChecks.length]);
 
-  const canShowTextInput = isDev && showTextInput;
+  const canShowTextInput = showTextInput;
   const listenLabel = canShowTextInput ? "Listen" : "Start Listening";
   const statusLabelClass = canShowTextInput ? "hidden sm:inline" : "";
+  const showResearchTopics = isDev && showResearchTopicsEnv !== "false";
 
   return (
     <main className="min-h-screen flex flex-col bg-bg">
@@ -586,32 +586,30 @@ export default function Home() {
                   />
                 </button>
               </div>
-              {isDev && (
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-sm text-text font-medium">Manual claim input</p>
-                    <p className="text-xs text-text-muted">
-                      Dev-only input field for quick checks.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-label="Manual claim input"
-                    aria-checked={showTextInput}
-                    onClick={() => setShowTextInput((prev) => !prev)}
-                    className={`relative w-11 h-6 rounded-full transition-colors ${
-                      showTextInput ? "bg-text" : "bg-border-strong"
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-bg transition-transform ${
-                        showTextInput ? "translate-x-5" : ""
-                      }`}
-                    />
-                  </button>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm text-text font-medium">Text input</p>
+                  <p className="text-xs text-text-muted">
+                    Show a text box to type claims.
+                  </p>
                 </div>
-              )}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="Text input"
+                  aria-checked={showTextInput}
+                  onClick={() => setShowTextInput((prev) => !prev)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    showTextInput ? "bg-text" : "bg-border-strong"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-bg transition-transform ${
+                      showTextInput ? "translate-x-5" : ""
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -669,6 +667,7 @@ export default function Home() {
                   <FactCheckCard
                     factCheck={fc}
                     showArgumentBreakdown={showArgumentBreakdown}
+                    showResearchTopics={showResearchTopics}
                   />
                 </div>
               ))}
@@ -710,7 +709,7 @@ export default function Home() {
           <div className="px-6 py-4">
             <div className="max-w-2xl mx-auto w-full">
               <div className={`flex items-end gap-2 min-w-0 ${canShowTextInput ? "" : "justify-center"}`}>
-                {/* Text input (dev-only, toggled in settings) */}
+                {/* Text input (toggled in settings) */}
                 {canShowTextInput && (
                   <form
                     ref={formRef}
