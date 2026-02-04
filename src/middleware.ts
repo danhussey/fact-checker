@@ -24,15 +24,25 @@ const WINDOW_MS = 60 * 1000; // 1 minute window
 // In-memory store: IP -> { endpoint -> { count, resetTime } }
 const rateLimitStore = new Map<string, Map<string, { count: number; resetTime: number }>>();
 
+// Daily token usage store: IP -> { count, date }
+const dailyTokenStore = new Map<string, { count: number; date: string }>();
+const MAX_DAILY_TOKENS = 4; // Max 4 sessions per day per IP
+
 // Cleanup old entries every 5 minutes
 let lastCleanup = Date.now();
 const CLEANUP_INTERVAL = 5 * 60 * 1000;
+
+function getTodayKey(): string {
+  return new Date().toISOString().split("T")[0];
+}
 
 function cleanup() {
   const now = Date.now();
   if (now - lastCleanup < CLEANUP_INTERVAL) return;
 
   lastCleanup = now;
+  const today = getTodayKey();
+
   for (const [ip, endpoints] of rateLimitStore) {
     for (const [endpoint, data] of endpoints) {
       if (now > data.resetTime) {
@@ -43,7 +53,33 @@ function cleanup() {
       rateLimitStore.delete(ip);
     }
   }
+
+  // Cleanup daily token store (remove entries from previous days)
+  for (const [ip, data] of dailyTokenStore) {
+    if (data.date !== today) {
+      dailyTokenStore.delete(ip);
+    }
+  }
 }
+
+function checkDailyTokenLimit(ip: string): { allowed: boolean; remaining: number } {
+  const today = getTodayKey();
+  const data = dailyTokenStore.get(ip);
+
+  if (!data || data.date !== today) {
+    // First request of the day or new day
+    dailyTokenStore.set(ip, { count: 1, date: today });
+    return { allowed: true, remaining: MAX_DAILY_TOKENS - 1 };
+  }
+
+  if (data.count >= MAX_DAILY_TOKENS) {
+    return { allowed: false, remaining: 0 };
+  }
+
+  data.count++;
+  return { allowed: true, remaining: MAX_DAILY_TOKENS - data.count };
+}
+
 
 function getClientIP(request: NextRequest): string {
   // Vercel/Cloudflare headers
@@ -120,6 +156,33 @@ export async function middleware(request: NextRequest) {
         },
       }
     );
+  }
+
+  // Special handling for deepgram-token: enforce daily limit
+  if (pathname === "/api/deepgram-token" && request.method === "POST") {
+    const { allowed, remaining } = checkDailyTokenLimit(hashedIP);
+
+    if (!allowed) {
+      console.log("[daily-limit]", { ip: hashedIP, endpoint: pathname });
+      return new NextResponse(
+        JSON.stringify({
+          error: "Daily session limit reached. Please try again tomorrow.",
+          dailyLimitExceeded: true,
+          sessionsRemaining: 0,
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
+
+    // Pass sessions remaining to API route via header
+    const response = NextResponse.next();
+    response.headers.set("X-Sessions-Remaining", String(remaining));
+    return response;
   }
 
   return NextResponse.next();

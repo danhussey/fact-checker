@@ -58,6 +58,29 @@ export interface FactCheck {
   timestamp: Date;
 }
 
+// Session usage limits for abuse prevention
+export const USAGE_LIMITS = {
+  maxSessionDurationMs: 30 * 60 * 1000,  // 30 min per session
+  maxDailyDurationMs: 2 * 60 * 60 * 1000, // 2 hours per day
+  warningThresholdMs: 5 * 60 * 1000,      // Warn at 5 min left
+  maxDailyTokenRequests: 4,               // 4 sessions per day per IP
+} as const;
+
+export interface SessionUsageState {
+  sessionStartTime: number | null;
+  elapsedMs: number;
+  isWarning: boolean;
+  isLimitReached: boolean;
+  dailyUsageMs: number;
+  sessionsRemaining: number;
+}
+
+export interface TokenResponse {
+  token: string;
+  sessionsRemaining: number;
+  maxDurationMs: number;
+}
+
 // Verdict display configuration - uses CSS variables for theme support
 export const verdictConfig: Record<Verdict, { bg: string; text: string; label: string }> = {
   "true": { bg: "bg-success-bg", text: "text-success", label: "True" },

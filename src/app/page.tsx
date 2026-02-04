@@ -12,6 +12,7 @@ import {
   isExplicitVerifyCue,
   normalizeClaim,
 } from "@/lib/claimProcessing";
+import { USAGE_LIMITS } from "@/lib/types";
 
 interface TranscriptChunk {
   text: string;
@@ -55,6 +56,16 @@ interface ExtractIntent {
 const isDev = process.env.NODE_ENV === "development";
 const enableTextInputEnv = process.env.NEXT_PUBLIC_ENABLE_TEXT_INPUT === "true";
 const showResearchTopicsEnv = process.env.NEXT_PUBLIC_SHOW_RESEARCH_TOPICS;
+
+function formatTimeRemaining(ms: number): string {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
 
 export default function Home() {
   const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
@@ -679,6 +690,42 @@ export default function Home() {
       {/* Bottom Bar - ChatGPT style */}
       <div className="fixed bottom-0 left-0 right-0 pb-safe">
         <div className="bg-bg/80 backdrop-blur-xl border-t border-border">
+          {/* Session limit warning banner */}
+          {listener.isListening && listener.sessionUsage.isWarning && (
+            <div className="px-6 py-2 bg-warning-bg border-b border-warning/20">
+              <div className="max-w-2xl mx-auto flex items-center gap-2">
+                <svg className="w-4 h-4 text-warning shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <p className="text-xs text-warning font-medium">
+                  Session ending in {formatTimeRemaining(USAGE_LIMITS.maxSessionDurationMs - listener.sessionUsage.elapsedMs)}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Session limit reached message */}
+          {listener.stopReason === "session_limit" && (
+            <div className="px-6 py-3 bg-border">
+              <div className="max-w-2xl mx-auto">
+                <p className="text-sm text-text-secondary">
+                  Session limit reached (30 min). Tap to start a new session.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Daily limit reached message */}
+          {listener.stopReason === "daily_limit" && (
+            <div className="px-6 py-3 bg-error-bg">
+              <div className="max-w-2xl mx-auto">
+                <p className="text-sm text-error">
+                  Daily limit reached. Please try again tomorrow.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Live transcript */}
           {listener.isListening && (transcript || listener.interimText) && (
             <div className="px-6 py-3 border-b border-border">

@@ -1,8 +1,49 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { USAGE_LIMITS, type SessionUsageState } from "@/lib/types";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
+
+// Local storage key for daily usage tracking
+const DAILY_USAGE_KEY = "fact-checker:daily-usage";
+
+interface DailyUsage {
+  date: string;
+  totalMs: number;
+  sessionCount: number;
+}
+
+function getTodayKey(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+function getDailyUsage(): DailyUsage {
+  if (typeof window === "undefined") {
+    return { date: getTodayKey(), totalMs: 0, sessionCount: 0 };
+  }
+  try {
+    const stored = localStorage.getItem(DAILY_USAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as DailyUsage;
+      if (parsed.date === getTodayKey()) {
+        return parsed;
+      }
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+  return { date: getTodayKey(), totalMs: 0, sessionCount: 0 };
+}
+
+function saveDailyUsage(usage: DailyUsage): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(DAILY_USAGE_KEY, JSON.stringify(usage));
+  } catch {
+    // Ignore localStorage errors
+  }
+}
 
 // Map browser locales to Deepgram language codes
 function getDeepgramLanguage(): string {
@@ -44,6 +85,8 @@ function getDeepgramLanguage(): string {
   return langMap[baseLang] || "en";
 }
 
+type StopReason = "user" | "session_limit" | "daily_limit" | "error";
+
 interface UseContinuousListenerReturn {
   isListening: boolean;
   transcript: string;
@@ -52,6 +95,9 @@ interface UseContinuousListenerReturn {
   connectionStatus: ConnectionStatus;
   startListening: () => void;
   stopListening: () => void;
+  // Session usage tracking
+  sessionUsage: SessionUsageState;
+  stopReason: StopReason | null;
 }
 
 // Deepgram transcript response structure
@@ -90,14 +136,88 @@ export function useContinuousListener(
   const [interimText, setInterimText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle");
+  const [stopReason, setStopReason] = useState<StopReason | null>(null);
+
+  // Session usage tracking
+  const [sessionUsage, setSessionUsage] = useState<SessionUsageState>(() => {
+    const daily = getDailyUsage();
+    return {
+      sessionStartTime: null,
+      elapsedMs: 0,
+      isWarning: false,
+      isLimitReached: false,
+      dailyUsageMs: daily.totalMs,
+      sessionsRemaining: Math.max(0, USAGE_LIMITS.maxDailyTokenRequests - daily.sessionCount),
+    };
+  });
 
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const isStoppingRef = useRef(false);
+  const sessionStartTimeRef = useRef<number | null>(null);
+  const usageTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const stopListeningInternalRef = useRef<(reason: StopReason) => void>(() => {});
+
+  // Update usage timer
+  const startUsageTimer = useCallback(() => {
+    if (usageTimerRef.current) {
+      clearInterval(usageTimerRef.current);
+    }
+
+    const startTime = Date.now();
+    sessionStartTimeRef.current = startTime;
+
+    usageTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const remaining = USAGE_LIMITS.maxSessionDurationMs - elapsed;
+      const isWarning = remaining <= USAGE_LIMITS.warningThresholdMs && remaining > 0;
+      const isLimitReached = remaining <= 0;
+
+      setSessionUsage((prev) => ({
+        ...prev,
+        sessionStartTime: startTime,
+        elapsedMs: elapsed,
+        isWarning,
+        isLimitReached,
+      }));
+
+      // Auto-stop at limit
+      if (isLimitReached) {
+        stopListeningInternalRef.current("session_limit");
+      }
+    }, 1000);
+  }, []);
+
+  const stopUsageTimer = useCallback((reason: StopReason) => {
+    if (usageTimerRef.current) {
+      clearInterval(usageTimerRef.current);
+      usageTimerRef.current = null;
+    }
+
+    // Save session duration to daily usage
+    if (sessionStartTimeRef.current) {
+      const sessionDuration = Date.now() - sessionStartTimeRef.current;
+      const daily = getDailyUsage();
+      daily.totalMs += sessionDuration;
+      saveDailyUsage(daily);
+
+      setSessionUsage((prev) => ({
+        ...prev,
+        sessionStartTime: null,
+        elapsedMs: 0,
+        isWarning: false,
+        isLimitReached: false,
+        dailyUsageMs: daily.totalMs,
+      }));
+    }
+
+    sessionStartTimeRef.current = null;
+    setStopReason(reason);
+  }, []);
 
   // Get temporary Deepgram token from our API
-  const getDeepgramToken = async (): Promise<string | null> => {
+  const getDeepgramToken = async (): Promise<{ token: string; sessionsRemaining: number } | null> => {
     try {
       const response = await fetch("/api/deepgram-token", {
         method: "POST",
@@ -105,13 +225,19 @@ export function useContinuousListener(
 
       if (!response.ok) {
         const data = await response.json();
+        if (response.status === 429 && data.dailyLimitExceeded) {
+          throw new Error("Daily session limit reached. Please try again tomorrow.");
+        }
         throw new Error(data.error || "Failed to get token");
       }
 
-      const { token } = await response.json();
-      return token;
+      const { token, sessionsRemaining } = await response.json();
+      return { token, sessionsRemaining };
     } catch (err) {
       console.error("Token fetch error:", err);
+      if (err instanceof Error) {
+        setError(err.message);
+      }
       return null;
     }
   };
@@ -136,11 +262,44 @@ export function useContinuousListener(
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || "audio/webm";
   }, []);
 
+  // Internal stop function that accepts a reason
+  const stopListeningInternal = useCallback((reason: StopReason) => {
+    isStoppingRef.current = true;
+    stopUsageTimer(reason);
+
+    // Stop MediaRecorder
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+
+    // Close WebSocket
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.close(1000);
+    }
+    socketRef.current = null;
+
+    // Stop microphone stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    setIsListening(false);
+    setInterimText("");
+  }, [stopUsageTimer]);
+
+  // Keep ref updated for use in interval
+  useEffect(() => {
+    stopListeningInternalRef.current = stopListeningInternal;
+  }, [stopListeningInternal]);
+
   const startListening = useCallback(async () => {
     setError(null);
     setTranscript("");
     setInterimText("");
     setConnectionStatus("connecting");
+    setStopReason(null);
     isStoppingRef.current = false;
 
     try {
@@ -155,10 +314,17 @@ export function useContinuousListener(
       streamRef.current = stream;
 
       // Get temporary token
-      const token = await getDeepgramToken();
-      if (!token) {
+      const tokenResponse = await getDeepgramToken();
+      if (!tokenResponse) {
         throw new Error("Failed to get transcription token");
       }
+      const { token, sessionsRemaining } = tokenResponse;
+
+      // Update sessions remaining
+      setSessionUsage((prev) => ({
+        ...prev,
+        sessionsRemaining,
+      }));
 
       // Build Deepgram WebSocket URL with options
       // Note: Don't specify encoding - let Deepgram auto-detect from the audio stream
@@ -190,6 +356,9 @@ export function useContinuousListener(
 
         setConnectionStatus("connected");
         setIsListening(true);
+
+        // Start usage tracking timer
+        startUsageTimer();
 
         // Start MediaRecorder to capture audio
         const mimeType = getMimeType();
@@ -266,37 +435,19 @@ export function useContinuousListener(
         setError(`Could not start listening: ${errorMessage}`);
       }
     }
-  }, [getMimeType, onTranscript]);
+  }, [getMimeType, onTranscript, startUsageTimer]);
 
   const stopListening = useCallback(() => {
-    isStoppingRef.current = true;
-
-    // Stop MediaRecorder
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
-    mediaRecorderRef.current = null;
-
-    // Close WebSocket
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.close(1000);
-    }
-    socketRef.current = null;
-
-    // Stop microphone stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-
-    setIsListening(false);
-    setInterimText("");
-  }, []);
+    stopListeningInternal("user");
+  }, [stopListeningInternal]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       isStoppingRef.current = true;
+      if (usageTimerRef.current) {
+        clearInterval(usageTimerRef.current);
+      }
       if (mediaRecorderRef.current?.state === "recording") {
         mediaRecorderRef.current.stop();
       }
@@ -317,5 +468,7 @@ export function useContinuousListener(
     connectionStatus,
     startListening,
     stopListening,
+    sessionUsage,
+    stopReason,
   };
 }
