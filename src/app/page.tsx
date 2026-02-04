@@ -674,7 +674,7 @@ export default function Home() {
                   </p>
 
                   {/* Topic chips */}
-                  {topics.length > 0 && (
+                  {showResearchTopics && topics.length > 0 && (
                     <div className="mt-4 w-full max-w-md">
                       <p className="text-xs text-text-muted uppercase tracking-wide mb-3 text-center">
                         Or explore researched topics
