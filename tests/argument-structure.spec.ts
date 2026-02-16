@@ -63,6 +63,36 @@ test.describe("Argument Structure - API Tests", () => {
 });
 
 test.describe("Argument Structure - E2E with Real Components", () => {
+  test("renders source chips in expanded claim card", async ({ page }) => {
+    const testClaim = "The speed of light is approximately 300,000 km per second";
+
+    await page.route("/api/fact-check", (route) => {
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(mockFactCheckResult),
+      });
+    });
+
+    await seedSettings(page);
+    await page.goto("/");
+
+    await page.getByTestId("claim-input").fill(testClaim);
+    await page.getByTestId("claim-submit").click();
+
+    const claimText = page.getByText(/speed of light/i);
+    await expect(claimText).toBeVisible({ timeout: 10000 });
+    await claimText.click();
+
+    const card = page
+      .locator("div.rounded-2xl.bg-surface")
+      .filter({ has: page.getByText(/speed of light/i) })
+      .first();
+
+    await expect(card.locator("span", { hasText: /^NIST$/ })).toBeVisible();
+    await expect(card.locator("span", { hasText: /^NASA$/ })).toBeVisible();
+  });
+
   test("renders FactCheckCard with mocked Toulmin structure", async ({ page }, testInfo) => {
     const testClaim = "The speed of light is approximately 300,000 km per second";
 

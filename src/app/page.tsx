@@ -528,7 +528,7 @@ export default function Home() {
   const canShowTextInput = showTextInput;
   const listenLabel = canShowTextInput ? "Listen" : "Start Listening";
   const statusLabelClass = canShowTextInput ? "hidden sm:inline" : "";
-  const showResearchTopics = isDev && showResearchTopicsEnv !== "false";
+  const showTopicListings = isDev && showResearchTopicsEnv !== "false";
 
   return (
     <main className="min-h-screen flex flex-col bg-bg">
@@ -674,7 +674,7 @@ export default function Home() {
                   </p>
 
                   {/* Topic chips */}
-                  {showResearchTopics && topics.length > 0 && (
+                  {showTopicListings && topics.length > 0 && (
                     <div className="mt-4 w-full max-w-md">
                       <p className="text-xs text-text-muted uppercase tracking-wide mb-3 text-center">
                         Or explore researched topics
@@ -700,7 +700,7 @@ export default function Home() {
                   <FactCheckCard
                     factCheck={fc}
                     showArgumentBreakdown={showArgumentBreakdown}
-                    showResearchTopics={showResearchTopics}
+                    showSourceChips
                   />
                 </div>
               ))}
