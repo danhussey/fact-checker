@@ -4,6 +4,17 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Fact Check",
   description: "Quick fact-checking with evidence from multiple sources",
+  openGraph: {
+    title: "Fact Check",
+    description: "Quick fact-checking with evidence from multiple sources",
+    type: "website",
+    siteName: "Fact Check",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Fact Check",
+    description: "Quick fact-checking with evidence from multiple sources",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",

@@ -6,6 +6,7 @@ import { VerdictBadge, VerdictBadgeLoading } from "./VerdictBadge";
 import { WhatsTrueCard, WhatsWrongCard, ContextCard } from "./InfoCard";
 import { SourceChip } from "./SourceChip";
 import { ArgumentBreakdown } from "./ArgumentBreakdown";
+import { ShareButton } from "./ShareButton";
 
 interface FactCheckCardProps {
   factCheck: FactCheck;
@@ -53,9 +54,14 @@ export function FactCheckCard({
             <span className="text-xs font-medium text-error">Error</span>
           ) : null}
 
-          <span className="text-xs text-text-muted">
-            {new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-          </span>
+          <div className="flex items-center gap-2">
+            {hasResult && (
+              <ShareButton claim={claim} result={result} />
+            )}
+            <span className="text-xs text-text-muted">
+              {new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+            </span>
+          </div>
         </div>
 
         {/* Claim text */}
