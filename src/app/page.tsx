@@ -77,6 +77,7 @@ export default function Home() {
   const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
   const [showTextInput, setShowTextInput] = useState(enableTextInputEnv);
   const [topics, setTopics] = useState<TopicListing[]>([]);
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
   const formRef = useRef<HTMLFormElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const factCheckQueueRef = useRef<QueuedClaim[]>([]);
@@ -134,6 +135,23 @@ export default function Home() {
     if (!showTextInput) return;
     resizeTextArea();
   }, [showTextInput, textInput, resizeTextArea]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
+    const handleViewportChange = () => {
+      const offset = window.innerHeight - viewport.height - viewport.offsetTop;
+      setKeyboardOffset(Math.max(0, offset));
+    };
+
+    viewport.addEventListener("resize", handleViewportChange);
+    viewport.addEventListener("scroll", handleViewportChange);
+    return () => {
+      viewport.removeEventListener("resize", handleViewportChange);
+      viewport.removeEventListener("scroll", handleViewportChange);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -710,7 +728,7 @@ export default function Home() {
       </div>
 
       {/* Bottom Bar - ChatGPT style */}
-      <div className="fixed bottom-0 left-0 right-0 pb-safe">
+      <div className="fixed left-0 right-0 pb-safe" style={{ bottom: keyboardOffset }}>
         <div className="bg-bg/80 backdrop-blur-xl border-t border-border">
           {/* Session limit warning banner */}
           {listener.isListening && listener.sessionUsage.isWarning && (
