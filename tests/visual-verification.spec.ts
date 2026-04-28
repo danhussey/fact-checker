@@ -14,7 +14,7 @@ test.describe("🎨 Visual: Topics Feature", () => {
     await page.goto("/");
 
     // Step 1: Verify main page loads
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
 
     // Step 2: Verify "explore topics" section appears
     await expect(page.getByText("Or explore researched topics")).toBeVisible();
@@ -125,7 +125,7 @@ test.describe("🎨 Visual: Topics Feature", () => {
 
     // Step 3: Verify we're back on main page
     await expect(page).toHaveURL("/");
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
 
     // Step 4: Verify topic chips are still visible
     await expect(page.getByRole("link", { name: /ICE Shooting Debate/i })).toBeVisible();
@@ -215,7 +215,7 @@ test.describe("📱 Visual: Responsive Design", () => {
     await page.goto("/");
 
     // Step 1: Verify main content is visible
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
 
     // Step 2: Verify topic chips wrap correctly
     await expect(page.getByText("Or explore researched topics")).toBeVisible();
@@ -247,7 +247,7 @@ test.describe("📱 Visual: Responsive Design", () => {
     await page.goto("/");
 
     // Verify layout adjusts for tablet
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
     await expect(page.getByRole("link", { name: /ICE Shooting/i })).toBeVisible();
   });
 });
@@ -256,7 +256,7 @@ test.describe("🔗 Visual: Navigation Flow", () => {
   test("Complete user journey: Browse topics then return", async ({ page }) => {
     // Step 1: Start on main page
     await page.goto("/");
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
 
     // Step 2: Click on a topic
     await page.getByRole("link", { name: /ICE Shooting/i }).click();
@@ -307,7 +307,7 @@ test.describe("🎭 Visual: Dark/Light Theme", () => {
     await page.goto("/");
 
     // Verify page loads (actual colors depend on CSS variables)
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
 
     // Take a pause to visually inspect dark mode
     await page.waitForTimeout(1000);
@@ -316,7 +316,7 @@ test.describe("🎭 Visual: Dark/Light Theme", () => {
     await page.emulateMedia({ colorScheme: "light" });
     await page.reload();
 
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
 
     // Take a pause to visually inspect light mode
     await page.waitForTimeout(1000);

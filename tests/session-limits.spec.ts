@@ -7,7 +7,7 @@ test.describe("Session Usage Limits", () => {
     await page.goto("/");
 
     // Verify the page loads correctly
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
   });
 
   test("daily token endpoint returns quota info", async ({ request }) => {

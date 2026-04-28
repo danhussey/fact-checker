@@ -526,7 +526,7 @@ export default function Home() {
   }, [factChecks.length]);
 
   const canShowTextInput = showTextInput;
-  const listenLabel = canShowTextInput ? "Listen" : "Start Listening";
+  const listenLabel = "Start listening";
   const statusLabelClass = canShowTextInput ? "hidden sm:inline" : "";
   const showTopicListings = isDev && showResearchTopicsEnv !== "false";
 
@@ -651,9 +651,12 @@ export default function Home() {
                       <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
                     </svg>
                   </div>
-                  <p className="text-text font-medium text-lg mb-2">Listening...</p>
+                  <p className="text-text font-medium text-lg mb-2">
+                    Listening for factual claims
+                  </p>
                   <p className="text-text-muted text-sm max-w-xs">
-                    Speak naturally. Claims will be fact-checked automatically.
+                    Speak naturally. When a claim comes up, Fact Check will look
+                    for evidence and show the result.
                   </p>
                 </>
               ) : (
@@ -668,9 +671,12 @@ export default function Home() {
                       <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
                     </svg>
                   </div>
-                  <p className="text-text font-medium text-lg mb-2">Ready to fact-check</p>
+                  <p className="text-text font-medium text-lg mb-2">
+                    Bring evidence into the conversation
+                  </p>
                   <p className="text-text-muted text-sm max-w-xs mb-8">
-                    Tap the microphone to start listening
+                    Tap the mic. Fact Check listens for factual claims and shows
+                    what&apos;s supported, disputed, or uncertain.
                   </p>
 
                   {/* Topic chips */}

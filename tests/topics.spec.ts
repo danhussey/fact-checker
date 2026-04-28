@@ -5,7 +5,7 @@ test.describe("Topical Deep Research", () => {
     await page.goto("/");
 
     // Wait for the page to load
-    await expect(page.getByText("Ready to fact-check")).toBeVisible();
+    await expect(page.getByText("Bring evidence into the conversation")).toBeVisible();
 
     // Check that topic chips are visible
     await expect(page.getByText("Or explore researched topics")).toBeVisible();

@@ -2,6 +2,7 @@ import { xai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
+import { directFactClaimFallback } from "@/lib/directClaimFallback";
 import crypto from "crypto";
 
 // Stop words to ignore in similarity comparison
@@ -211,6 +212,13 @@ export async function POST(request: Request) {
     let claims = result.object.claims.filter(
       (c) => typeof c === "string" && c.trim().length > 10
     );
+
+    if (claims.length === 0) {
+      const fallbackClaim = directFactClaimFallback(newText);
+      if (fallbackClaim) {
+        claims = [fallbackClaim];
+      }
+    }
     claims = claims.filter((claim) => {
       if (isMetaClaim(claim)) {
         debug.claims.skip(`meta: "${claim.slice(0, 40)}..."`);

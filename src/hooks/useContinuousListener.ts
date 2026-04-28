@@ -128,6 +128,14 @@ interface DeepgramTranscriptResponse {
   channel: DeepgramChannel;
 }
 
+function normalizeTranscriptSegment(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[.,!?;:'"]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function useContinuousListener(
   onTranscript: (text: string) => void
 ): UseContinuousListenerReturn {
@@ -155,6 +163,8 @@ export function useContinuousListener(
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const isStoppingRef = useRef(false);
+  const interimTextRef = useRef("");
+  const lastEmittedTextRef = useRef("");
   const sessionStartTimeRef = useRef<number | null>(null);
   const usageTimerRef = useRef<NodeJS.Timeout | null>(null);
   const stopListeningInternalRef = useRef<(reason: StopReason) => void>(() => {});
@@ -262,9 +272,31 @@ export function useContinuousListener(
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || "audio/webm";
   }, []);
 
+  const emitTranscript = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    const normalized = normalizeTranscriptSegment(trimmed);
+    if (normalized === lastEmittedTextRef.current) return;
+    lastEmittedTextRef.current = normalized;
+
+    setTranscript((prev) => {
+      const newTranscript = prev ? `${prev} ${trimmed}` : trimmed;
+      return newTranscript;
+    });
+    setInterimText("");
+    interimTextRef.current = "";
+    onTranscript(trimmed);
+  }, [onTranscript]);
+
   // Internal stop function that accepts a reason
   const stopListeningInternal = useCallback((reason: StopReason) => {
     isStoppingRef.current = true;
+
+    if (interimTextRef.current.trim()) {
+      emitTranscript(interimTextRef.current);
+    }
+
     stopUsageTimer(reason);
 
     // Stop MediaRecorder
@@ -287,7 +319,8 @@ export function useContinuousListener(
 
     setIsListening(false);
     setInterimText("");
-  }, [stopUsageTimer]);
+    interimTextRef.current = "";
+  }, [emitTranscript, stopUsageTimer]);
 
   // Keep ref updated for use in interval
   useEffect(() => {
@@ -298,6 +331,8 @@ export function useContinuousListener(
     setError(null);
     setTranscript("");
     setInterimText("");
+    interimTextRef.current = "";
+    lastEmittedTextRef.current = "";
     setConnectionStatus("connecting");
     setStopReason(null);
     isStoppingRef.current = false;
@@ -383,22 +418,29 @@ export function useContinuousListener(
         try {
           const data = JSON.parse(event.data);
 
+          if (data.type === "SpeechStarted") {
+            return;
+          }
+
+          if (data.type === "UtteranceEnd") {
+            if (interimTextRef.current.trim()) {
+              emitTranscript(interimTextRef.current);
+            }
+            return;
+          }
+
           if (data.type === "Results") {
             const result = data as DeepgramTranscriptResponse;
             const text = result.channel?.alternatives?.[0]?.transcript || "";
 
             if (text.trim()) {
               if (result.is_final) {
-                // Final result - add to transcript and trigger callback
-                setTranscript((prev) => {
-                  const newTranscript = prev ? `${prev} ${text.trim()}` : text.trim();
-                  return newTranscript;
-                });
-                setInterimText("");
-                onTranscript(text.trim());
+                emitTranscript(text.trim());
               } else {
                 // Interim result - show as faded text
-                setInterimText(text.trim());
+                const trimmed = text.trim();
+                interimTextRef.current = trimmed;
+                setInterimText(trimmed);
               }
             }
           }
@@ -435,7 +477,7 @@ export function useContinuousListener(
         setError(`Could not start listening: ${errorMessage}`);
       }
     }
-  }, [getMimeType, onTranscript, startUsageTimer]);
+  }, [emitTranscript, getMimeType, startUsageTimer]);
 
   const stopListening = useCallback(() => {
     stopListeningInternal("user");

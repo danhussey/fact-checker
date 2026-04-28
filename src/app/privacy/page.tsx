@@ -32,7 +32,7 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-lg font-semibold mb-3">Data We Process</h2>
             <ul className="list-disc list-inside text-zinc-300 space-y-2">
-              <li><strong>Audio:</strong> Captured from your microphone when you click &quot;Start Listening&quot;</li>
+              <li><strong>Audio:</strong> Captured from your microphone when you click &quot;Start listening&quot;</li>
               <li><strong>Transcripts:</strong> Text converted from your audio</li>
               <li><strong>Claims:</strong> Statements extracted for fact-checking</li>
             </ul>
