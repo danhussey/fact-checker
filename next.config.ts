@@ -4,8 +4,9 @@ import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // Enable Turbopack with empty config to silence warning
-  turbopack: {},
+  turbopack: {
+    debugIds: true,
+  },
 };
 
 const configWithPWA = withPWA({
@@ -36,5 +37,11 @@ export default withSentryConfig(configWithPWA, {
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
   silent: !process.env.CI,
+  debug: process.env.SENTRY_BUILD_DEBUG === "true",
   widenClientFileUpload: true,
+  sourcemaps: {
+    disable: false,
+    deleteSourcemapsAfterUpload: true,
+  },
+  useRunAfterProductionCompileHook: true,
 });
