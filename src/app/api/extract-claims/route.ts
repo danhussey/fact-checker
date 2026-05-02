@@ -6,9 +6,11 @@ import { claimFactsDiffer } from "@/lib/claimComparison";
 import { directFactClaimFallback } from "@/lib/directClaimFallback";
 import {
   addPipelineBreadcrumb,
+  addPipelineLog,
   capturePipelineError,
   claimDiagnosticData,
   limitDiagnosticText,
+  textStats,
   transcriptDiagnosticData,
   transcriptDiagnosticsEnabled,
 } from "@/lib/observability";
@@ -189,17 +191,27 @@ export async function POST(request: Request) {
     const checkedClaims: string[] = body.checkedClaims || [];
     const includeTranscriptDiagnostics =
       transcriptDiagnosticsEnabled && body.includeTranscriptDiagnostics !== false;
+    const diagnosticSessionId =
+      typeof body.diagnosticSessionId === "string"
+        ? body.diagnosticSessionId.slice(0, 120)
+        : undefined;
 
     addPipelineBreadcrumb("api.extract.start", {
       ...transcriptDiagnosticData(newText, includeTranscriptDiagnostics),
       contextLen: recentContext.length,
       context: transcriptDiagnosticData(recentContext, includeTranscriptDiagnostics).transcript,
       checkedClaimCount: checkedClaims.length,
+      diagnosticSessionId,
     });
     debug.claims.request(newText, recentContext, checkedClaims);
 
     if (!newText || typeof newText !== "string") {
       addPipelineBreadcrumb("api.extract.skip_no_text", {}, "warning");
+      addPipelineLog("api.claim_extraction.skipped", {
+        diagnosticSessionId,
+        route: "/api/extract-claims",
+        reason: "no_text",
+      }, "warn");
       debug.claims.skip("no text");
       return Response.json({ claims: [], forcedClaims: [] });
     }
@@ -210,6 +222,16 @@ export async function POST(request: Request) {
         "api.extract.skip_short_text",
         transcriptDiagnosticData(newText, includeTranscriptDiagnostics)
       );
+      addPipelineLog("api.claim_extraction.skipped", {
+        diagnosticSessionId,
+        route: "/api/extract-claims",
+        reason: "short_text",
+        inputTextLen: newText.trim().length,
+        inputWordCount: textStats(newText).wordCount,
+        transcript: includeTranscriptDiagnostics
+          ? limitDiagnosticText(newText, 1000)
+          : undefined,
+      });
       debug.claims.skip("text too short");
       return Response.json({ claims: [], forcedClaims: [] });
     }
@@ -236,17 +258,21 @@ export async function POST(request: Request) {
     let claims = result.object.claims.filter(
       (c) => typeof c === "string" && c.trim().length > 10
     );
+    const modelClaimCount = claims.length;
+    let fallbackUsed = false;
 
     if (claims.length === 0) {
       const fallbackClaim = directFactClaimFallback(newText);
       if (fallbackClaim) {
         claims = [fallbackClaim];
+        fallbackUsed = true;
         addPipelineBreadcrumb(
           "api.extract.fallback_claim",
           claimDiagnosticData(fallbackClaim, includeTranscriptDiagnostics)
         );
       }
     }
+    const beforeMetaFilterCount = claims.length;
     claims = claims.filter((claim) => {
       if (isMetaClaim(claim)) {
         debug.claims.skip(`meta: "${claim.slice(0, 40)}..."`);
@@ -254,6 +280,7 @@ export async function POST(request: Request) {
       }
       return true;
     });
+    const metaFilteredCount = beforeMetaFilterCount - claims.length;
 
     // Separate forced claims (explicit user requests) from regular claims
     const forcedClaims: string[] = [];
@@ -270,6 +297,7 @@ export async function POST(request: Request) {
 
     // Post-filter: remove regular claims too similar to already-checked ones
     let filteredRegular = regularClaims;
+    let duplicateFilteredCount = 0;
     if (checkedClaims.length > 0) {
       filteredRegular = regularClaims.filter(claim => {
         const claimLower = normalizeForComparison(claim);
@@ -299,6 +327,7 @@ export async function POST(request: Request) {
         }
         return !isDuplicate;
       });
+      duplicateFilteredCount = regularClaims.length - filteredRegular.length;
     }
 
     // Combine forced claims (always included) with filtered regular claims
@@ -310,6 +339,32 @@ export async function POST(request: Request) {
       forcedClaimCount: forcedClaims.length,
       claims: includeTranscriptDiagnostics && claims.length > 0
         ? limitDiagnosticText(claims.join(" | "), 2000)
+        : undefined,
+      diagnosticSessionId,
+    });
+    addPipelineLog("api.claim_extraction.completed", {
+      diagnosticSessionId,
+      route: "/api/extract-claims",
+      model: "grok-3-fast",
+      inputTextLen: newText.trim().length,
+      inputWordCount: textStats(newText).wordCount,
+      inputHasNumber: textStats(newText).hasNumber,
+      contextLen: recentContext.length,
+      checkedClaimCount: checkedClaims.length,
+      modelClaimCount,
+      fallbackUsed,
+      metaFilteredCount,
+      duplicateFilteredCount,
+      forcedClaimCount: forcedClaims.length,
+      claimCount: claims.length,
+      claims: includeTranscriptDiagnostics && claims.length > 0
+        ? limitDiagnosticText(claims.join(" | "), 2000)
+        : undefined,
+      transcript: includeTranscriptDiagnostics
+        ? limitDiagnosticText(newText, 2000)
+        : undefined,
+      contextTail: includeTranscriptDiagnostics && recentContext
+        ? limitDiagnosticText(recentContext, 2000)
         : undefined,
     });
     debug.claims.response(claims);

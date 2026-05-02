@@ -51,12 +51,15 @@ npm run dev
 | `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` | Optional source map upload during Vercel builds |
 | `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS` | Set to `false` to stop including transcript/claim text in Sentry diagnostics. Defaults to enabled. |
 | `NEXT_PUBLIC_TRANSCRIPT_DIAGNOSTIC_MAX_CHARS` | Max characters per transcript diagnostic field. Defaults to `4000`. |
+| `NEXT_PUBLIC_SENTRY_ENABLE_LOGS` / `SENTRY_ENABLE_LOGS` | Set to `false` to disable structured Sentry logs for claim extraction and fact-check review. |
 
 ## Observability
 
-Sentry is configured for client, server, edge, masked replay, and manual session feedback. The Feedback button sends a Sentry feedback event with a JSON diagnostics attachment and requests replay inclusion, so bad sessions can still be investigated even when normal replay sampling misses them.
+Sentry is configured for client, server, edge, masked replay, structured pipeline logs, and manual session feedback. The Feedback button sends a Sentry feedback event with a JSON diagnostics attachment and requests replay inclusion, so bad sessions can still be investigated even when normal replay sampling misses them.
 
-Transcript diagnostics are anonymous in the sense that the app does not attach a user account, name, or email. When `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS` is not `false`, users can control the Transcript diagnostics toggle in Settings. If enabled, Sentry breadcrumbs and feedback attachments can include recent transcript text and extracted claims to improve claim detection. Raw audio is not stored.
+Transcript diagnostics are anonymous in the sense that the app does not attach a user account, name, or email. When `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS` is not `false`, users can control the Transcript diagnostics toggle in Settings. If enabled, Sentry breadcrumbs, structured logs, and feedback attachments can include recent transcript text and extracted claims to improve claim detection. Raw audio is not stored.
+
+For claim-extraction review, search Sentry Logs for `area:fact-checker.pipeline` and messages such as `api.claim_extraction.completed`, `client.claim_extraction.completed`, and `api.fact_check.completed`. The shared `diagnosticSessionId` connects logs from the same browser session to any feedback attachment.
 
 ## Architecture
 

@@ -12,6 +12,7 @@ const replaysSessionSampleRate = Number(
 const replaysOnErrorSampleRate = Number(
   process.env.NEXT_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE ?? "1.0"
 );
+const enableLogs = process.env.NEXT_PUBLIC_SENTRY_ENABLE_LOGS !== "false";
 
 Sentry.init({
   dsn,
@@ -19,6 +20,7 @@ Sentry.init({
   environment: process.env.NEXT_PUBLIC_VERCEL_ENV || process.env.NODE_ENV,
   sendDefaultPii: false,
   tracesSampleRate,
+  enableLogs,
   integrations: [
     Sentry.replayIntegration({
       maskAllText: true,

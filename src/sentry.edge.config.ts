@@ -5,6 +5,9 @@ const tracesSampleRate = Number(
   process.env.SENTRY_TRACES_SAMPLE_RATE ??
     (process.env.NODE_ENV === "development" ? "1" : "0.1")
 );
+const enableLogs =
+  (process.env.SENTRY_ENABLE_LOGS ??
+    process.env.NEXT_PUBLIC_SENTRY_ENABLE_LOGS) !== "false";
 
 Sentry.init({
   dsn,
@@ -12,4 +15,5 @@ Sentry.init({
   environment: process.env.VERCEL_ENV || process.env.NODE_ENV,
   sendDefaultPii: false,
   tracesSampleRate,
+  enableLogs,
 });

@@ -1,6 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 
 type BreadcrumbData = Record<string, string | number | boolean | null | undefined>;
+type PipelineLogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 
 const transcriptDiagnosticsEnv =
   process.env.NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS;
@@ -72,6 +73,43 @@ export function addPipelineBreadcrumb(
     level,
     data,
   });
+}
+
+function normalizeLogAttributes(data: Record<string, unknown>) {
+  const attributes: Record<string, unknown> = {
+    area: "fact-checker.pipeline",
+  };
+
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    if (value === null) {
+      attributes[key] = null;
+      continue;
+    }
+
+    if (["string", "number", "boolean"].includes(typeof value)) {
+      attributes[key] = value;
+      continue;
+    }
+
+    attributes[key] = JSON.stringify(value);
+  }
+
+  return attributes;
+}
+
+export function addPipelineLog(
+  message: string,
+  data: Record<string, unknown> = {},
+  level: PipelineLogLevel = "info"
+) {
+  if (!Sentry.isEnabled()) return;
+
+  const log = Sentry.logger[level] as (
+    message: string,
+    attributes?: Record<string, unknown>
+  ) => void;
+  log(message, normalizeLogAttributes(data));
 }
 
 export function capturePipelineError(

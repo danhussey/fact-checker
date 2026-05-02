@@ -4,8 +4,10 @@ import { z } from "zod";
 import { debug } from "@/lib/debug";
 import {
   addPipelineBreadcrumb,
+  addPipelineLog,
   capturePipelineError,
   claimDiagnosticData,
+  limitDiagnosticText,
   transcriptDiagnosticData,
   transcriptDiagnosticsEnabled,
 } from "@/lib/observability";
@@ -98,6 +100,10 @@ export async function POST(request: Request) {
     const context = body.context || "";
     const includeTranscriptDiagnostics =
       transcriptDiagnosticsEnabled && body.includeTranscriptDiagnostics !== false;
+    const diagnosticSessionId =
+      typeof body.diagnosticSessionId === "string"
+        ? body.diagnosticSessionId.slice(0, 120)
+        : undefined;
 
     if (!claim || typeof claim !== "string") {
       return Response.json(
@@ -121,6 +127,7 @@ export async function POST(request: Request) {
       ...claimDiagnosticData(claim, includeTranscriptDiagnostics),
       contextLen: context.length,
       context: transcriptDiagnosticData(context, includeTranscriptDiagnostics).transcript,
+      diagnosticSessionId,
     });
     debug.factCheck.start(claim);
 
@@ -158,6 +165,22 @@ export async function POST(request: Request) {
         sourceCount: factCheck.sources.length,
         whatsTrueCount: factCheck.whatsTrue.length,
         whatsWrongCount: factCheck.whatsWrong.length,
+        diagnosticSessionId,
+      });
+      addPipelineLog("api.fact_check.completed", {
+        diagnosticSessionId,
+        route: "/api/fact-check",
+        model: "grok-3-fast",
+        verdict: factCheck.verdict,
+        confidence: factCheck.confidence,
+        sourceCount: factCheck.sources.length,
+        whatsTrueCount: factCheck.whatsTrue.length,
+        whatsWrongCount: factCheck.whatsWrong.length,
+        contextCount: factCheck.context.length,
+        claimLen: claim.length,
+        claim: includeTranscriptDiagnostics
+          ? limitDiagnosticText(claim, 1000)
+          : undefined,
       });
       debug.factCheck.done(claim, factCheck);
 
@@ -167,8 +190,17 @@ export async function POST(request: Request) {
       if (controller.signal.aborted) {
         capturePipelineError(new Error("Fact-check request timed out"), {
           route: "/api/fact-check",
+          diagnosticSessionId,
           ...claimDiagnosticData(claim, includeTranscriptDiagnostics),
         });
+        addPipelineLog("api.fact_check.timeout", {
+          diagnosticSessionId,
+          route: "/api/fact-check",
+          claimLen: claim.length,
+          claim: includeTranscriptDiagnostics
+            ? limitDiagnosticText(claim, 1000)
+            : undefined,
+        }, "warn");
         debug.factCheck.error(claim, "Request timed out after 45s");
         return Response.json(
           {

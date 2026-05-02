@@ -16,6 +16,7 @@ import {
 } from "@/lib/claimProcessing";
 import {
   addPipelineBreadcrumb,
+  addPipelineLog,
   capturePipelineError,
   claimDiagnosticData,
   limitDiagnosticText,
@@ -408,6 +409,7 @@ export default function Home() {
           claim: item.claim,
           context: item.context,
           includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
+          diagnosticSessionId: diagnosticSessionIdRef.current,
         }),
       });
 
@@ -434,6 +436,18 @@ export default function Home() {
         whatsWrongCount: result.whatsWrong.length,
         contextCount: result.context.length,
         sourceCount: result.sources.length,
+      });
+      addPipelineLog("client.fact_check.completed", {
+        diagnosticSessionId: diagnosticSessionIdRef.current,
+        claimId: item.id,
+        revision: item.revision,
+        verdict: result.verdict,
+        confidence: result.confidence,
+        sourceCount: result.sources.length,
+        claimLen: item.claim.length,
+        claim: transcriptDiagnosticsIncluded
+          ? limitDiagnosticText(item.claim, 1000)
+          : undefined,
       });
       setFactCheckResult(item.id, result);
     } catch (error) {
@@ -519,6 +533,7 @@ export default function Home() {
           recentContext: getRecentContext(),
           checkedClaims: getCheckedClaims(),
           includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
+          diagnosticSessionId: diagnosticSessionIdRef.current,
         }),
       });
 
@@ -536,6 +551,19 @@ export default function Home() {
       addPipelineBreadcrumb("extract.done", {
         claimCount: claims?.length || 0,
         forcedClaimCount: forcedClaims?.length || 0,
+      });
+      addPipelineLog("client.claim_extraction.completed", {
+        diagnosticSessionId: diagnosticSessionIdRef.current,
+        transcriptLen: textToProcess.trim().length,
+        checkedClaimCount: getCheckedClaims().length,
+        claimCount: claims?.length || 0,
+        forcedClaimCount: forcedClaims?.length || 0,
+        claims: transcriptDiagnosticsIncluded && claims?.length
+          ? limitDiagnosticText(claims.join(" | "), 2000)
+          : undefined,
+        transcript: transcriptDiagnosticsIncluded
+          ? limitDiagnosticText(textToProcess, 2000)
+          : undefined,
       });
 
       if (claims && claims.length > 0) {
