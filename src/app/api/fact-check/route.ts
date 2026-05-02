@@ -2,6 +2,12 @@ import { xai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
+import {
+  addPipelineBreadcrumb,
+  capturePipelineError,
+  claimDiagnosticData,
+  transcriptDiagnosticData,
+} from "@/lib/observability";
 import { normalizeSourceUrl } from "@/lib/sourceUrls";
 import crypto from "crypto";
 
@@ -108,6 +114,11 @@ export async function POST(request: Request) {
     claim = sanitizeInput(claim);
 
     console.log("[api:fact-check]", { ip, claimLen: claim.length, hasContext: !!context });
+    addPipelineBreadcrumb("api.fact_check.start", {
+      ...claimDiagnosticData(claim),
+      contextLen: context.length,
+      context: transcriptDiagnosticData(context).transcript,
+    });
     debug.factCheck.start(claim);
 
     const controller = new AbortController();
@@ -138,12 +149,23 @@ export async function POST(request: Request) {
           url: normalizeSourceUrl(source.url),
         })),
       };
+      addPipelineBreadcrumb("api.fact_check.done", {
+        verdict: factCheck.verdict,
+        confidence: factCheck.confidence,
+        sourceCount: factCheck.sources.length,
+        whatsTrueCount: factCheck.whatsTrue.length,
+        whatsWrongCount: factCheck.whatsWrong.length,
+      });
       debug.factCheck.done(claim, factCheck);
 
       return Response.json(factCheck);
     } catch (abortError) {
       clearTimeout(timeout);
       if (controller.signal.aborted) {
+        capturePipelineError(new Error("Fact-check request timed out"), {
+          route: "/api/fact-check",
+          ...claimDiagnosticData(claim),
+        });
         debug.factCheck.error(claim, "Request timed out after 45s");
         return Response.json(
           {
@@ -159,6 +181,7 @@ export async function POST(request: Request) {
       throw abortError;
     }
   } catch (error) {
+    capturePipelineError(error, { route: "/api/fact-check" });
     debug.factCheck.error("unknown", error);
 
     return Response.json(

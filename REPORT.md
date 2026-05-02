@@ -81,6 +81,16 @@ Structured logs for Vercel dashboard (IPs are SHA-256 hashed for privacy):
 [rate-limit] { ip: "a1b2c3d4e5f6", endpoint, retryAfter }
 ```
 
+### Sentry Diagnostics
+Sentry captures client, server, and edge errors, plus masked browser replay. The app also
+has a manual Feedback button that sends a Sentry feedback event with a JSON diagnostics
+attachment and asks Sentry to include the replay buffer.
+
+Transcript diagnostics are enabled unless `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS=false`
+is set. When enabled, Sentry breadcrumbs and feedback attachments can include recent
+transcript text and extracted claims so claim-detection failures can be debugged. Raw audio
+is not attached, and the app does not send a user account, name, or email with feedback.
+
 ### IP Anonymization
 All IP addresses are hashed before logging or rate-limit tracking:
 ```typescript
@@ -135,7 +145,11 @@ src/
 
 ```
 OPENAI_API_KEY=   # Whisper transcription
+DEEPGRAM_API_KEY= # Streaming transcription
 XAI_API_KEY=      # Grok (claims + fact-check)
+NEXT_PUBLIC_SENTRY_DSN=
+SENTRY_DSN=
+NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS=true
 ```
 
 ---

@@ -59,10 +59,11 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-lg font-semibold mb-3">Data Retention</h2>
             <p className="text-zinc-300">
-              <strong>We do not store your data.</strong> Audio and transcripts are processed
-              in real-time and discarded. We do not maintain databases of user content.
-              Fact-check results are only stored in your browser session and cleared when you
-              close the page.
+              <strong>We do not maintain a user-content database.</strong> Audio is processed
+              in real-time and discarded. Fact-check results are stored in your browser session
+              and cleared when you close the page. If transcript diagnostics are enabled, recent
+              transcript text and extracted claims may be retained in Sentry diagnostic events
+              and feedback reports so we can improve claim detection.
             </p>
           </section>
 
@@ -70,8 +71,13 @@ export default function PrivacyPolicy() {
             <h2 className="text-lg font-semibold mb-3">Analytics</h2>
             <p className="text-zinc-300">
               This app uses Vercel Analytics to understand basic site usage and performance.
-              Analytics are aggregate and do not include audio, transcripts, claims, or
-              fact-check results.
+              It also uses Sentry for error monitoring, masked session replay, and manual
+              feedback reports. Sentry replay masks on-screen text and inputs. Diagnostic events
+              include technical metadata such as connection state, text length, claim counts,
+              verdicts, and error details. When transcript diagnostics are enabled in deployment
+              config, diagnostic events and feedback attachments can also include recent
+              transcript text and extracted claims. These reports are not tied to an app account,
+              and raw audio is not stored in these diagnostics.
             </p>
           </section>
 

@@ -4,6 +4,14 @@ import { z } from "zod";
 import { debug } from "@/lib/debug";
 import { claimFactsDiffer } from "@/lib/claimComparison";
 import { directFactClaimFallback } from "@/lib/directClaimFallback";
+import {
+  addPipelineBreadcrumb,
+  capturePipelineError,
+  claimDiagnosticData,
+  limitDiagnosticText,
+  transcriptDiagnosticData,
+  transcriptDiagnosticsEnabled,
+} from "@/lib/observability";
 import crypto from "crypto";
 
 // Stop words to ignore in similarity comparison
@@ -180,15 +188,23 @@ export async function POST(request: Request) {
     const recentContext = body.recentContext || "";
     const checkedClaims: string[] = body.checkedClaims || [];
 
+    addPipelineBreadcrumb("api.extract.start", {
+      ...transcriptDiagnosticData(newText),
+      contextLen: recentContext.length,
+      context: transcriptDiagnosticData(recentContext).transcript,
+      checkedClaimCount: checkedClaims.length,
+    });
     debug.claims.request(newText, recentContext, checkedClaims);
 
     if (!newText || typeof newText !== "string") {
+      addPipelineBreadcrumb("api.extract.skip_no_text", {}, "warning");
       debug.claims.skip("no text");
       return Response.json({ claims: [], forcedClaims: [] });
     }
 
     // Skip very short text
     if (newText.trim().length < 10) {
+      addPipelineBreadcrumb("api.extract.skip_short_text", transcriptDiagnosticData(newText));
       debug.claims.skip("text too short");
       return Response.json({ claims: [], forcedClaims: [] });
     }
@@ -220,6 +236,7 @@ export async function POST(request: Request) {
       const fallbackClaim = directFactClaimFallback(newText);
       if (fallbackClaim) {
         claims = [fallbackClaim];
+        addPipelineBreadcrumb("api.extract.fallback_claim", claimDiagnosticData(fallbackClaim));
       }
     }
     claims = claims.filter((claim) => {
@@ -280,10 +297,18 @@ export async function POST(request: Request) {
     claims = [...forcedClaims, ...filteredRegular];
 
     console.log("[api:extract-claims]", { ip, claimsFound: claims.length, textLen: newText.length });
+    addPipelineBreadcrumb("api.extract.done", {
+      claimsFound: claims.length,
+      forcedClaimCount: forcedClaims.length,
+      claims: transcriptDiagnosticsEnabled && claims.length > 0
+        ? limitDiagnosticText(claims.join(" | "), 2000)
+        : undefined,
+    });
     debug.claims.response(claims);
 
     return Response.json({ claims, forcedClaims });
   } catch (error) {
+    capturePipelineError(error, { route: "/api/extract-claims" });
     debug.claims.skip(`error: ${error}`);
     return Response.json({ claims: [], forcedClaims: [] });
   }

@@ -14,6 +14,16 @@ import {
   isExplicitVerifyCue,
   normalizeClaim,
 } from "@/lib/claimProcessing";
+import {
+  addPipelineBreadcrumb,
+  capturePipelineError,
+  claimDiagnosticData,
+  limitDiagnosticText,
+  sendSessionDiagnosticsFeedback,
+  textStats,
+  transcriptDiagnosticData,
+  transcriptDiagnosticsEnabled,
+} from "@/lib/observability";
 import { USAGE_LIMITS } from "@/lib/types";
 
 interface TranscriptChunk {
@@ -55,9 +65,18 @@ interface ExtractIntent {
   hasExplicitVerify: boolean;
 }
 
+type FeedbackStatus = "idle" | "sending" | "sent" | "error";
+
 const isDev = process.env.NODE_ENV === "development";
 const enableTextInputEnv = process.env.NEXT_PUBLIC_ENABLE_TEXT_INPUT === "true";
 const showResearchTopicsEnv = process.env.NEXT_PUBLIC_SHOW_RESEARCH_TOPICS;
+
+function createDiagnosticSessionId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 function formatTimeRemaining(ms: number): string {
   const totalSeconds = Math.ceil(ms / 1000);
@@ -74,6 +93,10 @@ export default function Home() {
   const [transcript, setTranscript] = useState("");
   const [textInput, setTextInput] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [feedbackText, setFeedbackText] = useState("");
+  const [feedbackStatus, setFeedbackStatus] = useState<FeedbackStatus>("idle");
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
   const [showTextInput, setShowTextInput] = useState(enableTextInputEnv);
   const [topics, setTopics] = useState<TopicListing[]>([]);
@@ -91,6 +114,8 @@ export default function Home() {
     hasDispute: false,
     hasExplicitVerify: false,
   });
+  const diagnosticSessionIdRef = useRef(createDiagnosticSessionId());
+  const diagnosticSessionStartedAtRef = useRef(new Date().toISOString());
 
   const resizeTextArea = useCallback(() => {
     const el = textAreaRef.current;
@@ -261,10 +286,19 @@ export default function Home() {
           && now - matchedRecord.lastCheckedAt < CLAIM_TTL_MS;
 
         if (isRecentDone && !forceCheck && !urgent && matchScore >= CLAIM_DUPLICATE_THRESHOLD) {
+          addPipelineBreadcrumb("claim.skip_recent_duplicate", {
+            ...claimDiagnosticData(claim),
+            matchScore,
+            recordStatus: matchedRecord.status,
+          });
           return;
         }
 
         if (matchedRecord.status !== "done" && isSameText && !forceCheck && !urgent) {
+          addPipelineBreadcrumb("claim.skip_existing_inflight", {
+            ...claimDiagnosticData(claim),
+            recordStatus: matchedRecord.status,
+          });
           return;
         }
 
@@ -282,6 +316,13 @@ export default function Home() {
         }
 
         matchedRecord.status = "queued";
+        addPipelineBreadcrumb("claim.requeued", {
+          ...claimDiagnosticData(claim),
+          urgent,
+          forceCheck,
+          matchScore,
+          revision: matchedRecord.revision,
+        });
         upsertFactCheckLoading(matchedRecord.id, claim);
         enqueueClaim({
           id: matchedRecord.id,
@@ -306,6 +347,11 @@ export default function Home() {
       claimByIdRef.current.set(id, record);
       claimIndexRef.current.set(normalized, id);
       latestClaimIdRef.current = id;
+      addPipelineBreadcrumb("claim.queued", {
+        ...claimDiagnosticData(claim),
+        urgent,
+        forceCheck,
+      });
       upsertFactCheckLoading(id, claim);
       enqueueClaim({ id, claim, context, revision: 1, urgent });
     },
@@ -320,6 +366,11 @@ export default function Home() {
 
     record.status = "checking";
     record.inFlightRevision = item.revision;
+    addPipelineBreadcrumb("fact_check.start", {
+      ...claimDiagnosticData(item.claim),
+      revision: item.revision,
+      contextLen: item.context.length,
+    });
 
     try {
       const response = await fetch("/api/fact-check", {
@@ -329,6 +380,9 @@ export default function Home() {
       });
 
       if (!response.ok) {
+        addPipelineBreadcrumb("fact_check.http_error", {
+          status: response.status,
+        }, "error");
         throw new Error("Fact-check failed");
       }
 
@@ -341,9 +395,22 @@ export default function Home() {
       current.status = "done";
       current.lastCheckedAt = Date.now();
       current.inFlightRevision = undefined;
+      addPipelineBreadcrumb("fact_check.done", {
+        verdict: result.verdict,
+        confidence: result.confidence,
+        whatsTrueCount: result.whatsTrue.length,
+        whatsWrongCount: result.whatsWrong.length,
+        contextCount: result.context.length,
+        sourceCount: result.sources.length,
+      });
       setFactCheckResult(item.id, result);
     } catch (error) {
       console.error("Fact-check error:", error);
+      capturePipelineError(error, {
+        stage: "client-fact-check",
+        revision: item.revision,
+        ...claimDiagnosticData(item.claim),
+      });
       const current = claimByIdRef.current.get(item.id);
       if (!current || current.revision !== item.revision) {
         return;
@@ -398,10 +465,17 @@ export default function Home() {
   const doExtractClaims = useCallback(async (textToProcess: string, intent: ExtractIntent) => {
     const trimmed = textToProcess.trim();
     if (trimmed.length < MIN_EXTRACT_TEXT_CHARS && !intent.hasDispute && !intent.hasExplicitVerify) {
+      addPipelineBreadcrumb("extract.skip_short_text", transcriptDiagnosticData(trimmed));
       return;
     }
 
     try {
+      addPipelineBreadcrumb("extract.start", {
+        ...transcriptDiagnosticData(textToProcess),
+        hasDispute: intent.hasDispute,
+        hasExplicitVerify: intent.hasExplicitVerify,
+        checkedClaimCount: getCheckedClaims().length,
+      });
       const response = await fetch("/api/extract-claims", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -412,12 +486,21 @@ export default function Home() {
         }),
       });
 
-      if (!response.ok) return;
+      if (!response.ok) {
+        addPipelineBreadcrumb("extract.http_error", {
+          status: response.status,
+        }, "error");
+        return;
+      }
 
       const { claims, forcedClaims } = await response.json();
       const forcedSet = new Set<string>(forcedClaims || []);
       const context = getRecentContext();
       let queued = false;
+      addPipelineBreadcrumb("extract.done", {
+        claimCount: claims?.length || 0,
+        forcedClaimCount: forcedClaims?.length || 0,
+      });
 
       if (claims && claims.length > 0) {
         claims.forEach((claim: string) => {
@@ -442,6 +525,10 @@ export default function Home() {
       }
     } catch (error) {
       console.error("Claim extraction error:", error);
+      capturePipelineError(error, {
+        stage: "client-extract",
+        ...transcriptDiagnosticData(textToProcess),
+      });
     }
   }, [getRecentContext, getCheckedClaims, processQueue, queueClaimCheck]);
 
@@ -456,12 +543,18 @@ export default function Home() {
     pendingIntentRef.current.hasDispute = pendingIntentRef.current.hasDispute || hasDispute;
     pendingIntentRef.current.hasExplicitVerify =
       pendingIntentRef.current.hasExplicitVerify || hasExplicitVerify;
+    addPipelineBreadcrumb("extract.schedule", {
+      ...transcriptDiagnosticData(newText),
+      hasDispute,
+      hasExplicitVerify,
+    });
 
     if (extractTimeoutRef.current) {
       clearTimeout(extractTimeoutRef.current);
     }
 
     const delayMs = getExtractionDelayMs(newText, pendingIntentRef.current.hasExplicitVerify);
+    addPipelineBreadcrumb("extract.delay_selected", { delayMs });
 
     extractTimeoutRef.current = setTimeout(() => {
       const textToProcess = pendingTextRef.current;
@@ -488,11 +581,139 @@ export default function Home() {
 
   const listener = useContinuousListener(handleTranscript);
 
+  const buildSessionDiagnostics = useCallback((): Record<string, unknown> => {
+    const chunks = transcriptHistoryRef.current.slice(-80);
+    const transcriptText = chunks.map((chunk) => chunk.text).join(" ");
+    const pendingText = pendingTextRef.current.trim();
+    const browserContext =
+      typeof window === "undefined"
+        ? {}
+        : {
+            url: window.location.href,
+            viewport: {
+              width: window.innerWidth,
+              height: window.innerHeight,
+            },
+            online: navigator.onLine,
+            userAgent: navigator.userAgent,
+          };
+
+    return {
+      app: "fact-checker",
+      sessionId: diagnosticSessionIdRef.current,
+      sessionStartedAt: diagnosticSessionStartedAtRef.current,
+      sentAt: new Date().toISOString(),
+      browser: browserContext,
+      observability: {
+        transcriptDiagnosticsEnabled,
+        replayRequested: true,
+      },
+      listener: {
+        isListening: listener.isListening,
+        connectionStatus: listener.connectionStatus,
+        stopReason: listener.stopReason,
+        error: listener.error,
+        sessionUsage: listener.sessionUsage,
+      },
+      settings: {
+        showArgumentBreakdown,
+        showTextInput,
+      },
+      transcript: {
+        ...textStats(transcriptText),
+        chunkCount: chunks.length,
+        visibleTextStats: textStats(transcript),
+        fullText: transcriptDiagnosticsEnabled
+          ? limitDiagnosticText(transcriptText, 12000)
+          : undefined,
+        chunks: chunks.map((chunk) => ({
+          timestamp: new Date(chunk.timestamp).toISOString(),
+          ...textStats(chunk.text),
+          text: transcriptDiagnosticsEnabled
+            ? limitDiagnosticText(chunk.text, 1000)
+            : undefined,
+        })),
+      },
+      pendingExtraction: {
+        ...textStats(pendingText),
+        text: transcriptDiagnosticsEnabled
+          ? limitDiagnosticText(pendingText, 4000)
+          : undefined,
+        hasDispute: pendingIntentRef.current.hasDispute,
+        hasExplicitVerify: pendingIntentRef.current.hasExplicitVerify,
+      },
+      claims: factChecks.map((factCheck) => ({
+        id: factCheck.id,
+        timestamp: factCheck.timestamp.toISOString(),
+        status: factCheck.isLoading ? "loading" : factCheck.error ? "error" : "done",
+        error: factCheck.error,
+        claimStats: textStats(factCheck.claim),
+        claim: transcriptDiagnosticsEnabled
+          ? limitDiagnosticText(factCheck.claim, 1000)
+          : undefined,
+        result: factCheck.result
+          ? {
+              verdict: factCheck.result.verdict,
+              confidence: factCheck.result.confidence,
+              whatsTrue: factCheck.result.whatsTrue,
+              whatsWrong: factCheck.result.whatsWrong,
+              context: factCheck.result.context,
+              sourceCount: factCheck.result.sources.length,
+              sources: factCheck.result.sources,
+              argumentQualifier: factCheck.result.argument?.qualifier,
+            }
+          : null,
+      })),
+      queue: {
+        queuedCount: factCheckQueueRef.current.length,
+        isProcessing: isProcessingRef.current,
+        knownClaimCount: claimByIdRef.current.size,
+      },
+    };
+  }, [
+    factChecks,
+    listener.connectionStatus,
+    listener.error,
+    listener.isListening,
+    listener.sessionUsage,
+    listener.stopReason,
+    showArgumentBreakdown,
+    showTextInput,
+    transcript,
+  ]);
+
+  const handleFeedbackSubmit = useCallback(async (event: React.FormEvent) => {
+    event.preventDefault();
+    setFeedbackStatus("sending");
+    setFeedbackError(null);
+    addPipelineBreadcrumb("feedback.send_requested", {
+      factCheckCount: factChecks.length,
+      transcriptDiagnosticsEnabled,
+    });
+
+    try {
+      const eventId = await sendSessionDiagnosticsFeedback(
+        feedbackText,
+        buildSessionDiagnostics()
+      );
+      addPipelineBreadcrumb("feedback.sent", { eventId });
+      setFeedbackStatus("sent");
+      setFeedbackText("");
+    } catch (error) {
+      capturePipelineError(error, { stage: "feedback-send" });
+      setFeedbackStatus("error");
+      setFeedbackError(
+        error instanceof Error ? error.message : "Feedback could not be sent."
+      );
+    }
+  }, [buildSessionDiagnostics, factChecks.length, feedbackText]);
+
   const handleTextSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
     const claim = textInput.trim();
     if (!claim) return;
 
+    addPipelineBreadcrumb("text_claim.submitted", claimDiagnosticData(claim));
     queueClaimCheck(claim, {
       context: getRecentContext(),
       urgent: true,
@@ -546,6 +767,17 @@ export default function Home() {
             >
               Settings
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsFeedbackOpen(true);
+                setFeedbackStatus("idle");
+                setFeedbackError(null);
+              }}
+              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+            >
+              Feedback
+            </button>
             <Link
               href="/privacy"
               className="text-xs text-text-muted hover:text-text-secondary transition-colors"
@@ -560,7 +792,7 @@ export default function Home() {
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
           <button
             type="button"
-            aria-label="Close settings"
+            aria-label="Dismiss settings"
             onClick={() => setIsSettingsOpen(false)}
             className="absolute inset-0 bg-black/30"
           />
@@ -631,6 +863,74 @@ export default function Home() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {isFeedbackOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <button
+            type="button"
+            aria-label="Dismiss feedback"
+            onClick={() => setIsFeedbackOpen(false)}
+            className="absolute inset-0 bg-black/30"
+          />
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-label="Share session"
+            onSubmit={handleFeedbackSubmit}
+            className="relative w-full max-w-md rounded-t-2xl sm:rounded-2xl bg-surface border border-border overflow-hidden"
+            style={{ boxShadow: "var(--shadow-lg)" }}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h2 className="text-sm font-semibold text-text">Share session</h2>
+              <button
+                type="button"
+                onClick={() => setIsFeedbackOpen(false)}
+                className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+              >
+                Close
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-4">
+              <label className="block">
+                <span className="text-sm text-text font-medium">What went wrong?</span>
+                <textarea
+                  rows={4}
+                  value={feedbackText}
+                  onChange={(event) => {
+                    setFeedbackText(event.target.value);
+                    if (feedbackStatus !== "sending") {
+                      setFeedbackStatus("idle");
+                    }
+                  }}
+                  placeholder="Missed a claim, checked too early, showed an error..."
+                  className="mt-2 w-full rounded-xl bg-bg border border-border px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-text-secondary resize-none"
+                />
+              </label>
+              <p className="text-xs text-text-muted">
+                Sends anonymous diagnostics
+                {transcriptDiagnosticsEnabled
+                  ? ", including recent transcript text."
+                  : ". Transcript text is disabled in config."}
+              </p>
+              {feedbackStatus === "sent" && (
+                <p className="text-xs text-success">Feedback sent.</p>
+              )}
+              {feedbackStatus === "error" && (
+                <p className="text-xs text-error">
+                  {feedbackError || "Feedback could not be sent."}
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={feedbackStatus === "sending"}
+                className="w-full h-10 rounded-full bg-text text-bg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+              >
+                {feedbackStatus === "sending" ? "Sending" : "Send feedback"}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

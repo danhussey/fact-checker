@@ -206,6 +206,22 @@ test.describe("🛡️ Visual: Abuse Prevention UI", () => {
     await page.getByRole("button", { name: /Close/i }).click();
     await expect(modal).not.toBeVisible();
   });
+
+  test("Feedback modal opens and shows session diagnostics action", async ({ page }) => {
+    await page.goto("/");
+
+    const feedbackButton = page.getByRole("button", { name: /Feedback/i });
+    await expect(feedbackButton).toBeVisible();
+    await feedbackButton.click();
+
+    const modal = page.getByRole("dialog", { name: /Share session/i });
+    await expect(modal).toBeVisible();
+    await expect(page.getByText("What went wrong?")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Send feedback/i })).toBeVisible();
+
+    await page.getByRole("button", { name: /Close/i }).click();
+    await expect(modal).not.toBeVisible();
+  });
 });
 
 test.describe("📱 Visual: Responsive Design", () => {

@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import withPWA from "@ducanh2912/next-pwa";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -7,7 +8,7 @@ const nextConfig: NextConfig = {
   turbopack: {},
 };
 
-export default withPWA({
+const configWithPWA = withPWA({
   dest: "public",
   cacheOnFrontEndNav: true,
   aggressiveFrontEndNavCaching: true,
@@ -29,3 +30,11 @@ export default withPWA({
     ],
   },
 })(nextConfig);
+
+export default withSentryConfig(configWithPWA, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+  widenClientFileUpload: true,
+});

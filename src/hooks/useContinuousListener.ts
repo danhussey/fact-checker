@@ -2,6 +2,11 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { USAGE_LIMITS, type SessionUsageState } from "@/lib/types";
+import {
+  addPipelineBreadcrumb,
+  capturePipelineError,
+  transcriptDiagnosticData,
+} from "@/lib/observability";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -245,6 +250,7 @@ export function useContinuousListener(
       return { token, sessionsRemaining };
     } catch (err) {
       console.error("Token fetch error:", err);
+      capturePipelineError(err, { stage: "deepgram-token" });
       if (err instanceof Error) {
         setError(err.message);
       }
@@ -280,6 +286,7 @@ export function useContinuousListener(
     if (normalized === lastEmittedTextRef.current) return;
     lastEmittedTextRef.current = normalized;
 
+    addPipelineBreadcrumb("transcript.emitted", transcriptDiagnosticData(trimmed));
     setTranscript((prev) => {
       const newTranscript = prev ? `${prev} ${trimmed}` : trimmed;
       return newTranscript;
@@ -292,8 +299,13 @@ export function useContinuousListener(
   // Internal stop function that accepts a reason
   const stopListeningInternal = useCallback((reason: StopReason) => {
     isStoppingRef.current = true;
+    addPipelineBreadcrumb("listener.stop", { reason });
 
     if (interimTextRef.current.trim()) {
+      addPipelineBreadcrumb(
+        "transcript.flush_on_stop",
+        transcriptDiagnosticData(interimTextRef.current)
+      );
       emitTranscript(interimTextRef.current);
     }
 
@@ -328,6 +340,7 @@ export function useContinuousListener(
   }, [stopListeningInternal]);
 
   const startListening = useCallback(async () => {
+    addPipelineBreadcrumb("listener.start_requested");
     setError(null);
     setTranscript("");
     setInterimText("");
@@ -347,6 +360,7 @@ export function useContinuousListener(
         },
       });
       streamRef.current = stream;
+      addPipelineBreadcrumb("listener.microphone_ready");
 
       // Get temporary token
       const tokenResponse = await getDeepgramToken();
@@ -354,6 +368,7 @@ export function useContinuousListener(
         throw new Error("Failed to get transcription token");
       }
       const { token, sessionsRemaining } = tokenResponse;
+      addPipelineBreadcrumb("listener.deepgram_token_received", { sessionsRemaining });
 
       // Update sessions remaining
       setSessionUsage((prev) => ({
@@ -365,6 +380,7 @@ export function useContinuousListener(
       // Note: Don't specify encoding - let Deepgram auto-detect from the audio stream
       const detectedLanguage = getDeepgramLanguage();
       console.log("[transcription] Using language:", detectedLanguage);
+      addPipelineBreadcrumb("deepgram.connecting", { language: detectedLanguage });
 
       const params = new URLSearchParams({
         model: "nova-3",
@@ -391,6 +407,7 @@ export function useContinuousListener(
 
         setConnectionStatus("connected");
         setIsListening(true);
+        addPipelineBreadcrumb("deepgram.connected");
 
         // Start usage tracking timer
         startUsageTimer();
@@ -419,10 +436,14 @@ export function useContinuousListener(
           const data = JSON.parse(event.data);
 
           if (data.type === "SpeechStarted") {
+            addPipelineBreadcrumb("deepgram.speech_started");
             return;
           }
 
           if (data.type === "UtteranceEnd") {
+            addPipelineBreadcrumb("deepgram.utterance_end", {
+              hadInterimText: Boolean(interimTextRef.current.trim()),
+            });
             if (interimTextRef.current.trim()) {
               emitTranscript(interimTextRef.current);
             }
@@ -435,6 +456,10 @@ export function useContinuousListener(
 
             if (text.trim()) {
               if (result.is_final) {
+                addPipelineBreadcrumb("deepgram.final_result", {
+                  ...transcriptDiagnosticData(text),
+                  speechFinal: result.speech_final,
+                });
                 emitTranscript(text.trim());
               } else {
                 // Interim result - show as faded text
@@ -453,12 +478,23 @@ export function useContinuousListener(
         console.error("WebSocket error:", event);
         setConnectionStatus("error");
         setError("Connection error. Please try again.");
+        capturePipelineError(new Error("Deepgram WebSocket error"), {
+          stage: "deepgram-websocket",
+        });
       };
 
       socket.onclose = (event) => {
+        addPipelineBreadcrumb("deepgram.closed", {
+          code: event.code,
+          wasClean: event.wasClean,
+        }, event.code === 1000 ? "info" : "warning");
         if (!isStoppingRef.current && event.code !== 1000) {
           setConnectionStatus("error");
           setError("Connection closed unexpectedly. Please try again.");
+          capturePipelineError(new Error("Deepgram WebSocket closed unexpectedly"), {
+            stage: "deepgram-websocket",
+            code: event.code,
+          });
         } else {
           setConnectionStatus("idle");
         }
@@ -468,6 +504,7 @@ export function useContinuousListener(
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
       setConnectionStatus("error");
+      capturePipelineError(err, { stage: "listener-start" });
 
       if (errorMessage.includes("Permission denied") || errorMessage.includes("NotAllowedError")) {
         setError("Microphone access denied. Please allow microphone access.");
