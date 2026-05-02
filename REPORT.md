@@ -152,7 +152,7 @@ src/
 
 ```
 OPENAI_API_KEY=   # Whisper transcription
-DEEPGRAM_API_KEY= # Streaming transcription
+DEEPGRAM_API_KEY= # Server-side key with Deepgram /v1/auth/grant permission
 XAI_API_KEY=      # Grok (claims + fact-check)
 NEXT_PUBLIC_SENTRY_DSN=
 SENTRY_DSN=

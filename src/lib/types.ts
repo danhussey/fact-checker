@@ -58,12 +58,10 @@ export interface FactCheck {
   timestamp: Date;
 }
 
-// Session usage limits for abuse prevention
+// Recording limits for runaway sessions.
 export const USAGE_LIMITS = {
-  maxSessionDurationMs: 30 * 60 * 1000,  // 30 min per session
-  maxDailyDurationMs: 2 * 60 * 60 * 1000, // 2 hours per day
-  warningThresholdMs: 5 * 60 * 1000,      // Warn at 5 min left
-  maxDailyTokenRequests: 4,               // 4 sessions per day per IP
+  maxSessionDurationMs: 2 * 60 * 60 * 1000, // 2 hours per recording
+  warningThresholdMs: 5 * 60 * 1000,        // Warn at 5 min left
 } as const;
 
 export interface SessionUsageState {
@@ -71,13 +69,13 @@ export interface SessionUsageState {
   elapsedMs: number;
   isWarning: boolean;
   isLimitReached: boolean;
-  dailyUsageMs: number;
-  sessionsRemaining: number;
 }
 
 export interface TokenResponse {
   token: string;
-  sessionsRemaining: number;
+  tokenType: "bearer";
+  expiresAt: string;
+  expiresIn: number;
   maxDurationMs: number;
 }
 

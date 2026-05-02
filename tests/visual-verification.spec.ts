@@ -169,27 +169,17 @@ test.describe("🛡️ Visual: Abuse Prevention UI", () => {
     ).toBeVisible();
   });
 
-  test("Session usage state is initialized", async ({ page }) => {
+  test("Session usage state does not create daily usage storage", async ({ page }) => {
     await page.goto("/");
 
-    // Step 1: Check that localStorage has the usage tracking key structure
-    const hasUsageKey = await page.evaluate(() => {
-      const key = "fact-checker:daily-usage";
-      const stored = localStorage.getItem(key);
-      if (!stored) return "not-set";
-      try {
-        const parsed = JSON.parse(stored);
-        return parsed.date && typeof parsed.totalMs === "number" ? "valid" : "invalid";
-      } catch {
-        return "invalid";
-      }
+    const hasLegacyUsageKey = await page.evaluate(() => {
+      return localStorage.getItem("fact-checker:daily-usage") !== null;
     });
 
-    // Initially may not be set, which is fine
-    expect(["not-set", "valid"]).toContain(hasUsageKey);
+    expect(hasLegacyUsageKey).toBe(false);
   });
 
-  test("API returns session quota info", async ({ page, request }) => {
+  test("API returns temporary transcription auth info", async ({ page, request }) => {
     await page.goto("/");
 
     // Step 1: Make a request to the token endpoint
@@ -199,15 +189,16 @@ test.describe("🛡️ Visual: Abuse Prevention UI", () => {
     if (response.ok()) {
       const data = await response.json();
 
-      // Step 3: Verify quota fields exist
-      expect(data).toHaveProperty("sessionsRemaining");
+      // Step 3: Verify temporary auth fields exist
+      expect(data).toHaveProperty("token");
+      expect(data).toHaveProperty("tokenType", "bearer");
+      expect(data).toHaveProperty("expiresAt");
+      expect(data).toHaveProperty("expiresIn");
       expect(data).toHaveProperty("maxDurationMs");
-      expect(data.maxDurationMs).toBe(30 * 60 * 1000); // 30 minutes
-
-      console.log("Sessions remaining:", data.sessionsRemaining);
+      expect(data.maxDurationMs).toBe(2 * 60 * 60 * 1000);
     } else {
-      // Expected in test environment without API key
-      expect(response.status()).toBe(500);
+      // Expected in test environment without API key or external Deepgram access.
+      expect([500, 502]).toContain(response.status());
     }
   });
 

@@ -88,7 +88,7 @@ export default function PrivacyPolicy() {
               To prevent abuse, we use anonymized (hashed) IP addresses for rate limiting.
               Your actual IP address is never stored - only a one-way hash that cannot be
               reversed to identify you. These hashes are temporary and used only to enforce
-              fair usage limits.
+              short request throttles and the recording duration cap.
             </p>
           </section>
 

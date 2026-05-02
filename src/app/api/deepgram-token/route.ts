@@ -3,6 +3,13 @@ import type { NextRequest } from "next/server";
 import crypto from "crypto";
 import { USAGE_LIMITS } from "@/lib/types";
 
+const DEEPGRAM_TOKEN_TTL_SECONDS = 60;
+
+interface DeepgramGrantResponse {
+  access_token?: string;
+  expires_in?: number;
+}
+
 function getClientIP(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0].trim();
@@ -15,8 +22,9 @@ function hashIP(ip: string): string {
 
 export async function POST(request: NextRequest) {
   const ip = hashIP(getClientIP(request));
+  const apiKey = process.env.DEEPGRAM_API_KEY;
 
-  if (!process.env.DEEPGRAM_API_KEY) {
+  if (!apiKey) {
     console.error("[api:deepgram-token] Missing DEEPGRAM_API_KEY");
     return NextResponse.json(
       { error: "Transcription service not configured" },
@@ -24,20 +32,60 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Get sessions remaining from middleware header (or default to max)
-  const sessionsRemainingHeader = request.headers.get("X-Sessions-Remaining");
-  const sessionsRemaining = sessionsRemainingHeader
-    ? parseInt(sessionsRemainingHeader, 10)
-    : USAGE_LIMITS.maxDailyTokenRequests;
-
-  // Return the API key for WebSocket auth
-  // Security: This endpoint is rate-limited (5 req/min) and daily-limited (4/day) in middleware
-  console.log("[api:deepgram-token]", { ip, sessionsRemaining });
-
-  return NextResponse.json({
-    token: process.env.DEEPGRAM_API_KEY,
-    sessionsRemaining,
-    maxDurationMs: USAGE_LIMITS.maxSessionDurationMs,
-    expiresAt: new Date(Date.now() + 55 * 60 * 1000).toISOString(),
+  const grantResponse = await fetch("https://api.deepgram.com/v1/auth/grant", {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ttl_seconds: DEEPGRAM_TOKEN_TTL_SECONDS }),
+    cache: "no-store",
   });
+
+  if (!grantResponse.ok) {
+    console.error("[api:deepgram-token] Deepgram grant failed", {
+      ip,
+      status: grantResponse.status,
+      requestId: grantResponse.headers.get("dg-request-id"),
+      deepgramError: grantResponse.headers.get("dg-error"),
+    });
+    return NextResponse.json(
+      { error: "Could not create transcription token" },
+      { status: 502 }
+    );
+  }
+
+  const grant = (await grantResponse.json()) as DeepgramGrantResponse;
+  if (!grant.access_token || !grant.expires_in) {
+    console.error("[api:deepgram-token] Deepgram grant response missing token", {
+      ip,
+      hasToken: Boolean(grant.access_token),
+      expiresIn: grant.expires_in,
+    });
+    return NextResponse.json(
+      { error: "Invalid transcription token response" },
+      { status: 502 }
+    );
+  }
+
+  console.log("[api:deepgram-token]", {
+    ip,
+    expiresIn: grant.expires_in,
+    maxDurationMs: USAGE_LIMITS.maxSessionDurationMs,
+  });
+
+  return NextResponse.json(
+    {
+      token: grant.access_token,
+      tokenType: "bearer",
+      expiresIn: grant.expires_in,
+      expiresAt: new Date(Date.now() + grant.expires_in * 1000).toISOString(),
+      maxDurationMs: USAGE_LIMITS.maxSessionDurationMs,
+    },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    }
+  );
 }

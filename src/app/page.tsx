@@ -1173,18 +1173,7 @@ export default function Home() {
             <div className="px-6 py-3 bg-border">
               <div className="max-w-2xl mx-auto">
                 <p className="text-sm text-text-secondary">
-                  Session limit reached (30 min). Tap to start a new session.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Daily limit reached message */}
-          {listener.stopReason === "daily_limit" && (
-            <div className="px-6 py-3 bg-error-bg">
-              <div className="max-w-2xl mx-auto">
-                <p className="text-sm text-error">
-                  Daily limit reached. Please try again tomorrow.
+                  Recording stopped after 2 hours. Tap to start a new session.
                 </p>
               </div>
             </div>

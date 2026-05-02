@@ -10,60 +10,20 @@ import {
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
 
-// Local storage key for daily usage tracking
-const DAILY_USAGE_KEY = "fact-checker:daily-usage";
-
-interface DailyUsage {
-  date: string;
-  totalMs: number;
-  sessionCount: number;
-}
-
 interface DeepgramTokenResponse {
   token: string;
-  sessionsRemaining: number;
+  tokenType: "bearer";
   expiresAt?: string;
+  expiresIn?: number;
   maxDurationMs?: number;
 }
 
 interface CachedDeepgramToken {
   token: string;
-  sessionsRemaining: number;
   expiresAt: number;
 }
 
-const DEEPGRAM_TOKEN_CACHE_MS = 55 * 60 * 1000;
-
-function getTodayKey(): string {
-  return new Date().toISOString().split("T")[0];
-}
-
-function getDailyUsage(): DailyUsage {
-  if (typeof window === "undefined") {
-    return { date: getTodayKey(), totalMs: 0, sessionCount: 0 };
-  }
-  try {
-    const stored = localStorage.getItem(DAILY_USAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored) as DailyUsage;
-      if (parsed.date === getTodayKey()) {
-        return parsed;
-      }
-    }
-  } catch {
-    // Ignore localStorage errors
-  }
-  return { date: getTodayKey(), totalMs: 0, sessionCount: 0 };
-}
-
-function saveDailyUsage(usage: DailyUsage): void {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(DAILY_USAGE_KEY, JSON.stringify(usage));
-  } catch {
-    // Ignore localStorage errors
-  }
-}
+const DEEPGRAM_TOKEN_CACHE_BUFFER_MS = 5 * 1000;
 
 // Map browser locales to Deepgram language codes
 function getDeepgramLanguage(): string {
@@ -105,7 +65,7 @@ function getDeepgramLanguage(): string {
   return langMap[baseLang] || "en";
 }
 
-type StopReason = "user" | "session_limit" | "daily_limit" | "error";
+type StopReason = "user" | "session_limit" | "error";
 
 interface UseContinuousListenerReturn {
   isListening: boolean;
@@ -172,16 +132,12 @@ export function useContinuousListener(
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle");
   const [stopReason, setStopReason] = useState<StopReason | null>(null);
 
-  // Session usage tracking
   const [sessionUsage, setSessionUsage] = useState<SessionUsageState>(() => {
-    const daily = getDailyUsage();
     return {
       sessionStartTime: null,
       elapsedMs: 0,
       isWarning: false,
       isLimitReached: false,
-      dailyUsageMs: daily.totalMs,
-      sessionsRemaining: Math.max(0, USAGE_LIMITS.maxDailyTokenRequests - daily.sessionCount),
     };
   });
 
@@ -215,6 +171,12 @@ export function useContinuousListener(
 
     const startTime = Date.now();
     sessionStartTimeRef.current = startTime;
+    setSessionUsage({
+      sessionStartTime: startTime,
+      elapsedMs: 0,
+      isWarning: false,
+      isLimitReached: false,
+    });
 
     usageTimerRef.current = setInterval(() => {
       const elapsed = Date.now() - startTime;
@@ -243,38 +205,28 @@ export function useContinuousListener(
       usageTimerRef.current = null;
     }
 
-    // Save session duration to daily usage
-    if (sessionStartTimeRef.current) {
-      const sessionDuration = Date.now() - sessionStartTimeRef.current;
-      const daily = getDailyUsage();
-      daily.totalMs += sessionDuration;
-      saveDailyUsage(daily);
-
-      setSessionUsage((prev) => ({
-        ...prev,
-        sessionStartTime: null,
-        elapsedMs: 0,
-        isWarning: false,
-        isLimitReached: false,
-        dailyUsageMs: daily.totalMs,
-      }));
-    }
-
     sessionStartTimeRef.current = null;
+    setSessionUsage((prev) => ({
+      ...prev,
+      sessionStartTime: null,
+      elapsedMs: 0,
+      isWarning: false,
+      isLimitReached: false,
+    }));
     setStopReason(reason);
   }, []);
 
-  // Get Deepgram auth from our API, reusing it across stop/start cycles.
-  const getDeepgramToken = async (): Promise<{ token: string; sessionsRemaining: number } | null> => {
+  // Get short-lived Deepgram auth from our API, reusing it only while valid.
+  const getDeepgramToken = async (): Promise<{ token: string } | null> => {
     try {
       const cachedToken = tokenCacheRef.current;
-      if (cachedToken && cachedToken.expiresAt > Date.now()) {
-        addPipelineBreadcrumb("listener.deepgram_token_reused", {
-          sessionsRemaining: cachedToken.sessionsRemaining,
-        });
+      if (
+        cachedToken &&
+        cachedToken.expiresAt - DEEPGRAM_TOKEN_CACHE_BUFFER_MS > Date.now()
+      ) {
+        addPipelineBreadcrumb("listener.deepgram_token_reused");
         return {
           token: cachedToken.token,
-          sessionsRemaining: cachedToken.sessionsRemaining,
         };
       }
 
@@ -284,28 +236,25 @@ export function useContinuousListener(
 
       if (!response.ok) {
         const data = await response.json();
-        if (response.status === 429 && data.dailyLimitExceeded) {
-          throw new Error("Daily session limit reached. Please try again tomorrow.");
+        if (response.status === 429) {
+          throw new Error("Too many start attempts. Please wait a minute and try again.");
         }
         throw new Error(data.error || "Failed to get token");
       }
 
       const data = (await response.json()) as DeepgramTokenResponse;
-      const expiresAt = data.expiresAt
-        ? Date.parse(data.expiresAt)
-        : Date.now() + DEEPGRAM_TOKEN_CACHE_MS;
+      const fallbackExpiresAt = Date.now() + (data.expiresIn ?? 30) * 1000;
+      const expiresAt = data.expiresAt ? Date.parse(data.expiresAt) : fallbackExpiresAt;
 
       tokenCacheRef.current = {
         token: data.token,
-        sessionsRemaining: data.sessionsRemaining,
         expiresAt: Number.isFinite(expiresAt)
           ? expiresAt
-          : Date.now() + DEEPGRAM_TOKEN_CACHE_MS,
+          : fallbackExpiresAt,
       };
 
       return {
         token: data.token,
-        sessionsRemaining: data.sessionsRemaining,
       };
     } catch (err) {
       console.error("Token fetch error:", err);
@@ -459,14 +408,8 @@ export function useContinuousListener(
       if (!tokenResponse) {
         throw new Error("Failed to get transcription token");
       }
-      const { token, sessionsRemaining } = tokenResponse;
-      addPipelineBreadcrumb("listener.deepgram_token_received", { sessionsRemaining });
-
-      // Update sessions remaining
-      setSessionUsage((prev) => ({
-        ...prev,
-        sessionsRemaining,
-      }));
+      const { token } = tokenResponse;
+      addPipelineBreadcrumb("listener.deepgram_token_received");
 
       // Build Deepgram WebSocket URL with options
       // Note: Don't specify encoding - let Deepgram auto-detect from the audio stream
@@ -488,7 +431,7 @@ export function useContinuousListener(
       const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
 
       // Open WebSocket connection
-      const socket = new WebSocket(wsUrl, ["token", token]);
+      const socket = new WebSocket(wsUrl, ["bearer", token]);
       socketRef.current = socket;
 
       socket.onopen = () => {

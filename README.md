@@ -43,7 +43,7 @@ npm run dev
 
 | Variable | Description |
 |----------|-------------|
-| `DEEPGRAM_API_KEY` | Deepgram API key for streaming transcription |
+| `DEEPGRAM_API_KEY` | Server-side Deepgram API key used to mint short-lived browser transcription tokens. Must have permission to call Deepgram `/v1/auth/grant`. |
 | `XAI_API_KEY` | xAI API key for Grok |
 | `OPENAI_API_KEY` | OpenAI API key for legacy transcription fallback |
 | `NEXT_PUBLIC_SENTRY_DSN` | Public Sentry DSN for browser errors, replay, and feedback |
