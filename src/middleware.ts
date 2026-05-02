@@ -14,7 +14,7 @@ async function hashIP(ip: string): Promise<string> {
 // Rate limit configuration per endpoint (requests per minute)
 const RATE_LIMITS: Record<string, number> = {
   "/api/transcribe": 10,       // Legacy Whisper (fallback)
-  "/api/deepgram-token": 5,    // Token generation (one per session)
+  "/api/deepgram-token": 5,    // Deepgram auth issuance
   "/api/extract-claims": 30,
   "/api/fact-check": 30,
 };

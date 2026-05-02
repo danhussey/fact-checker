@@ -19,6 +19,21 @@ interface DailyUsage {
   sessionCount: number;
 }
 
+interface DeepgramTokenResponse {
+  token: string;
+  sessionsRemaining: number;
+  expiresAt?: string;
+  maxDurationMs?: number;
+}
+
+interface CachedDeepgramToken {
+  token: string;
+  sessionsRemaining: number;
+  expiresAt: number;
+}
+
+const DEEPGRAM_TOKEN_CACHE_MS = 55 * 60 * 1000;
+
 function getTodayKey(): string {
   return new Date().toISOString().split("T")[0];
 }
@@ -180,6 +195,7 @@ export function useContinuousListener(
   const usageTimerRef = useRef<NodeJS.Timeout | null>(null);
   const stopListeningInternalRef = useRef<(reason: StopReason) => void>(() => {});
   const isStartingRef = useRef(false);
+  const tokenCacheRef = useRef<CachedDeepgramToken | null>(null);
   const onTranscriptRef = useRef(onTranscript);
   const includeTranscriptDiagnosticsRef = useRef(options.includeTranscriptDiagnostics);
 
@@ -248,9 +264,20 @@ export function useContinuousListener(
     setStopReason(reason);
   }, []);
 
-  // Get temporary Deepgram token from our API
+  // Get Deepgram auth from our API, reusing it across stop/start cycles.
   const getDeepgramToken = async (): Promise<{ token: string; sessionsRemaining: number } | null> => {
     try {
+      const cachedToken = tokenCacheRef.current;
+      if (cachedToken && cachedToken.expiresAt > Date.now()) {
+        addPipelineBreadcrumb("listener.deepgram_token_reused", {
+          sessionsRemaining: cachedToken.sessionsRemaining,
+        });
+        return {
+          token: cachedToken.token,
+          sessionsRemaining: cachedToken.sessionsRemaining,
+        };
+      }
+
       const response = await fetch("/api/deepgram-token", {
         method: "POST",
       });
@@ -263,10 +290,26 @@ export function useContinuousListener(
         throw new Error(data.error || "Failed to get token");
       }
 
-      const { token, sessionsRemaining } = await response.json();
-      return { token, sessionsRemaining };
+      const data = (await response.json()) as DeepgramTokenResponse;
+      const expiresAt = data.expiresAt
+        ? Date.parse(data.expiresAt)
+        : Date.now() + DEEPGRAM_TOKEN_CACHE_MS;
+
+      tokenCacheRef.current = {
+        token: data.token,
+        sessionsRemaining: data.sessionsRemaining,
+        expiresAt: Number.isFinite(expiresAt)
+          ? expiresAt
+          : Date.now() + DEEPGRAM_TOKEN_CACHE_MS,
+      };
+
+      return {
+        token: data.token,
+        sessionsRemaining: data.sessionsRemaining,
+      };
     } catch (err) {
       console.error("Token fetch error:", err);
+      tokenCacheRef.current = null;
       capturePipelineError(err, { stage: "deepgram-token" });
       if (err instanceof Error) {
         setError(err.message);

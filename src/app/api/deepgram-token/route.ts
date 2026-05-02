@@ -38,5 +38,6 @@ export async function POST(request: NextRequest) {
     token: process.env.DEEPGRAM_API_KEY,
     sessionsRemaining,
     maxDurationMs: USAGE_LIMITS.maxSessionDurationMs,
+    expiresAt: new Date(Date.now() + 55 * 60 * 1000).toISOString(),
   });
 }
