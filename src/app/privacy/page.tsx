@@ -19,7 +19,7 @@ export default function PrivacyPolicy() {
       <div className="flex-1 p-4">
         <div className="max-w-2xl mx-auto prose prose-invert prose-sm">
           <h1 className="text-2xl font-bold mb-6">Privacy Policy</h1>
-          <p className="text-zinc-400 text-sm mb-8">Last updated: December 2024</p>
+          <p className="text-zinc-400 text-sm mb-8">Last updated: May 2026</p>
 
           <section className="mb-8">
             <h2 className="text-lg font-semibold mb-3">What This App Does</h2>
@@ -67,10 +67,11 @@ export default function PrivacyPolicy() {
           </section>
 
           <section className="mb-8">
-            <h2 className="text-lg font-semibold mb-3">Cookies &amp; Tracking</h2>
+            <h2 className="text-lg font-semibold mb-3">Analytics</h2>
             <p className="text-zinc-300">
-              This app does not use cookies or tracking analytics. We do not collect personal
-              information or track your usage.
+              This app uses Vercel Analytics to understand basic site usage and performance.
+              Analytics are aggregate and do not include audio, transcripts, claims, or
+              fact-check results.
             </p>
           </section>
 

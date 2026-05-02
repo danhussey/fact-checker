@@ -50,4 +50,37 @@ test.describe("Source Chips with Topic Flag Disabled", () => {
     await expect(card.locator("span", { hasText: /^NIST$/ })).toBeVisible();
     await expect(card.locator("span", { hasText: /^NASA$/ })).toBeVisible();
   });
+
+  test("renders placeholder source urls as plain chips", async ({ page }) => {
+    await page.route("/api/fact-check", (route) => {
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...mockFactCheckResult,
+          context: ["No data on the claim found in reliable sources."],
+          sources: [{ name: "General Search", url: "N/A" }],
+        }),
+      });
+    });
+
+    await seedTextInputSetting(page);
+    await page.goto("/");
+
+    await page.getByTestId("claim-input").fill("The Apple Tower is 300 feet tall");
+    await page.getByTestId("claim-submit").click();
+
+    const claimText = page.getByText(/Apple Tower/i);
+    await expect(claimText).toBeVisible({ timeout: 10000 });
+    await claimText.click();
+
+    const card = page
+      .locator("div.rounded-2xl.bg-surface")
+      .filter({ has: page.getByText(/Apple Tower/i) })
+      .first();
+
+    await expect(card.locator("span", { hasText: /^General Search$/ })).toBeVisible();
+    await expect(card.locator("a", { hasText: /General Search/ })).toHaveCount(0);
+    await expect(card.locator("a[href='/N/A']")).toHaveCount(0);
+  });
 });

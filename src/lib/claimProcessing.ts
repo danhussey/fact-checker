@@ -1,5 +1,7 @@
 "use client";
 
+import { claimFactsDiffer } from "./claimComparison";
+
 const STOP_WORDS = new Set([
   "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
   "have", "has", "had", "do", "does", "did", "will", "would", "could",
@@ -68,6 +70,7 @@ export function claimSimilarityScore(a: string, b: string): number {
   const normalizedB = normalizeClaim(b);
 
   if (!normalizedA || !normalizedB) return 0;
+  if (claimFactsDiffer(a, b)) return 0;
   if (normalizedA === normalizedB) return 1;
   if (normalizedA.includes(normalizedB) || normalizedB.includes(normalizedA)) return 0.95;
 

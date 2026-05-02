@@ -2,6 +2,7 @@ import { xai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
+import { normalizeSourceUrl } from "@/lib/sourceUrls";
 import crypto from "crypto";
 
 const factCheckSchema = z.object({
@@ -51,6 +52,7 @@ EXAMPLE BULLET FORMAT:
 ✗ "Claim says 2x but adjusted ratio is 1.5:1"
 
 Keep each bullet under 15 words. Numbers first, source in parentheses.
+Do not invent source URLs. Omit source.url if unavailable; never use "N/A".
 
 CONFIDENCE: 4=solid data, 3=good sources, 2=limited data, 1=unclear
 
@@ -129,9 +131,16 @@ export async function POST(request: Request) {
 
       clearTimeout(timeout);
       console.log("[usage:fact-check]", { model: "grok-3-fast", ...result.usage });
-      debug.factCheck.done(claim, result.object);
+      const factCheck = {
+        ...result.object,
+        sources: result.object.sources.map((source) => ({
+          ...source,
+          url: normalizeSourceUrl(source.url),
+        })),
+      };
+      debug.factCheck.done(claim, factCheck);
 
-      return Response.json(result.object);
+      return Response.json(factCheck);
     } catch (abortError) {
       clearTimeout(timeout);
       if (controller.signal.aborted) {

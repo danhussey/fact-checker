@@ -1,12 +1,16 @@
 "use client";
 
+import { normalizeSourceUrl } from "@/lib/sourceUrls";
+
 interface SourceChipProps {
   name: string;
   url?: string;
 }
 
 export function SourceChip({ name, url }: SourceChipProps) {
-  if (!url) {
+  const sourceUrl = normalizeSourceUrl(url);
+
+  if (!sourceUrl) {
     return (
       <span className="px-2.5 py-1 rounded-lg text-xs bg-bg-secondary text-text-secondary">
         {name}
@@ -16,7 +20,7 @@ export function SourceChip({ name, url }: SourceChipProps) {
 
   return (
     <a
-      href={url}
+      href={sourceUrl}
       target="_blank"
       rel="noopener noreferrer"
       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-info-bg text-info hover:opacity-80 transition-opacity"

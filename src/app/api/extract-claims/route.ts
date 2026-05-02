@@ -2,6 +2,7 @@ import { xai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
+import { claimFactsDiffer } from "@/lib/claimComparison";
 import { directFactClaimFallback } from "@/lib/directClaimFallback";
 import crypto from "crypto";
 
@@ -113,6 +114,7 @@ ${checkedClaims.map(c => `- "${c}"`).join("\n")}
 
 If the transcript repeats or rephrases any of these claims, return EMPTY array.
 "Indigenous Australians get twice as much" = SAME AS = "They receive 2x funding" = DUPLICATE!
+"The Eiffel Tower is 25 meters tall" is NOT the same as "The Eiffel Tower is 25 minutes tall" because the factual payload changed.
 `
     : "";
 
@@ -151,6 +153,7 @@ RULES:
 3. BAD: "twice as much as white Australians" (missing subject)
 4. GOOD: "Indigenous Australians receive twice as much funding as white Australians per capita"
 5. If a new statement CONTRADICTS a checked claim, extract it as NEW (not a duplicate)
+6. If the number, unit, date, entity, or property changes, extract it as NEW
 
 Return 0-2 NEW claims only. If nothing NEW, return empty array.
 For explicit requests, prefix with "FORCE:" to bypass duplicate check.`;
@@ -248,6 +251,9 @@ export async function POST(request: Request) {
         // Check for obvious duplicates
         const isDuplicate = checkedClaims.some(checked => {
           const checkedLower = normalizeForComparison(checked);
+          if (claimFactsDiffer(claim, checked)) {
+            return false;
+          }
           if (isLikelyContradiction(claimLower, checkedLower)) {
             return false;
           }
