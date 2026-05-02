@@ -63,7 +63,8 @@ export default function PrivacyPolicy() {
               in real-time and discarded. Fact-check results are stored in your browser session
               and cleared when you close the page. If transcript diagnostics are enabled, recent
               transcript text and extracted claims may be retained in Sentry diagnostic events
-              and feedback reports so we can improve claim detection.
+              and feedback reports so we can improve claim detection. You can turn transcript
+              diagnostics off in Settings.
             </p>
           </section>
 
@@ -75,9 +76,9 @@ export default function PrivacyPolicy() {
               feedback reports. Sentry replay masks on-screen text and inputs. Diagnostic events
               include technical metadata such as connection state, text length, claim counts,
               verdicts, and error details. When transcript diagnostics are enabled in deployment
-              config, diagnostic events and feedback attachments can also include recent
-              transcript text and extracted claims. These reports are not tied to an app account,
-              and raw audio is not stored in these diagnostics.
+              config and in Settings, diagnostic events and feedback attachments can also include
+              recent transcript text and extracted claims. These reports are not tied to an app
+              account, and raw audio is not stored in these diagnostics.
             </p>
           </section>
 

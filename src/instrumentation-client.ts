@@ -9,6 +9,9 @@ const replaysSessionSampleRate = Number(
   process.env.NEXT_PUBLIC_SENTRY_REPLAYS_SESSION_SAMPLE_RATE ??
     (process.env.NODE_ENV === "development" ? "1" : "0.1")
 );
+const replaysOnErrorSampleRate = Number(
+  process.env.NEXT_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE ?? "1.0"
+);
 
 Sentry.init({
   dsn,
@@ -24,7 +27,7 @@ Sentry.init({
     }),
   ],
   replaysSessionSampleRate,
-  replaysOnErrorSampleRate: 1.0,
+  replaysOnErrorSampleRate,
 });
 
 export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;

@@ -35,20 +35,30 @@ export function textStats(text: string): BreadcrumbData {
   };
 }
 
-export function textDiagnosticData(text: string, textKey: string): BreadcrumbData {
+export function textDiagnosticData(
+  text: string,
+  textKey: string,
+  includeText = transcriptDiagnosticsEnabled
+): BreadcrumbData {
   const data = textStats(text);
-  if (transcriptDiagnosticsEnabled) {
+  if (includeText) {
     data[textKey] = limitDiagnosticText(text);
   }
   return data;
 }
 
-export function transcriptDiagnosticData(text: string): BreadcrumbData {
-  return textDiagnosticData(text, "transcript");
+export function transcriptDiagnosticData(
+  text: string,
+  includeText = transcriptDiagnosticsEnabled
+): BreadcrumbData {
+  return textDiagnosticData(text, "transcript", includeText);
 }
 
-export function claimDiagnosticData(text: string): BreadcrumbData {
-  return textDiagnosticData(text, "claim");
+export function claimDiagnosticData(
+  text: string,
+  includeText = transcriptDiagnosticsEnabled
+): BreadcrumbData {
+  return textDiagnosticData(text, "claim", includeText);
 }
 
 export function addPipelineBreadcrumb(
@@ -76,26 +86,10 @@ export function capturePipelineError(
   });
 }
 
-type SentryWithFeedback = typeof Sentry & {
-  sendFeedback?: (
-    params: {
-      message: string;
-      tags?: Record<string, string | number | boolean>;
-    },
-    hint?: {
-      includeReplay?: boolean;
-      attachments?: Array<{
-        filename: string;
-        data: string | Uint8Array;
-        contentType?: string;
-      }>;
-    }
-  ) => Promise<string>;
-};
-
 export async function sendSessionDiagnosticsFeedback(
   message: string,
-  diagnostics: Record<string, unknown>
+  diagnostics: Record<string, unknown>,
+  options: { transcriptDiagnosticsIncluded?: boolean } = {}
 ) {
   const attachment = {
     filename: `fact-check-session-${Date.now()}.json`,
@@ -103,38 +97,25 @@ export async function sendSessionDiagnosticsFeedback(
     contentType: "application/json",
   };
   const feedbackMessage = message.trim() || "Session feedback";
-  const tags = {
-    source: "manual-session-feedback",
-    transcriptDiagnostics: transcriptDiagnosticsEnabled ? "enabled" : "disabled",
-  };
-  const sentry = Sentry as SentryWithFeedback;
+  const transcriptDiagnosticsIncluded =
+    options.transcriptDiagnosticsIncluded ?? transcriptDiagnosticsEnabled;
 
-  if (typeof sentry.sendFeedback === "function") {
-    return sentry.sendFeedback(
-      {
-        message: feedbackMessage,
-        tags,
-      },
-      {
-        includeReplay: true,
-        attachments: [attachment],
-      }
-    );
+  if (!Sentry.isEnabled()) {
+    throw new Error("Sentry is not configured.");
   }
 
-  return Sentry.captureEvent(
+  const tags = {
+    transcriptDiagnostics: transcriptDiagnosticsIncluded ? "included" : "metadata-only",
+  };
+
+  return Sentry.captureFeedback(
     {
       message: feedbackMessage,
-      level: "info",
+      source: "manual-session-feedback",
       tags,
-      contexts: {
-        feedback: {
-          message: feedbackMessage,
-          source: "manual-session-feedback",
-        },
-      },
     },
     {
+      includeReplay: true,
       attachments: [attachment],
     }
   );

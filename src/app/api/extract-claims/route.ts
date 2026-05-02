@@ -187,11 +187,13 @@ export async function POST(request: Request) {
     const newText = body.newText || body.text || "";
     const recentContext = body.recentContext || "";
     const checkedClaims: string[] = body.checkedClaims || [];
+    const includeTranscriptDiagnostics =
+      transcriptDiagnosticsEnabled && body.includeTranscriptDiagnostics !== false;
 
     addPipelineBreadcrumb("api.extract.start", {
-      ...transcriptDiagnosticData(newText),
+      ...transcriptDiagnosticData(newText, includeTranscriptDiagnostics),
       contextLen: recentContext.length,
-      context: transcriptDiagnosticData(recentContext).transcript,
+      context: transcriptDiagnosticData(recentContext, includeTranscriptDiagnostics).transcript,
       checkedClaimCount: checkedClaims.length,
     });
     debug.claims.request(newText, recentContext, checkedClaims);
@@ -204,7 +206,10 @@ export async function POST(request: Request) {
 
     // Skip very short text
     if (newText.trim().length < 10) {
-      addPipelineBreadcrumb("api.extract.skip_short_text", transcriptDiagnosticData(newText));
+      addPipelineBreadcrumb(
+        "api.extract.skip_short_text",
+        transcriptDiagnosticData(newText, includeTranscriptDiagnostics)
+      );
       debug.claims.skip("text too short");
       return Response.json({ claims: [], forcedClaims: [] });
     }
@@ -236,7 +241,10 @@ export async function POST(request: Request) {
       const fallbackClaim = directFactClaimFallback(newText);
       if (fallbackClaim) {
         claims = [fallbackClaim];
-        addPipelineBreadcrumb("api.extract.fallback_claim", claimDiagnosticData(fallbackClaim));
+        addPipelineBreadcrumb(
+          "api.extract.fallback_claim",
+          claimDiagnosticData(fallbackClaim, includeTranscriptDiagnostics)
+        );
       }
     }
     claims = claims.filter((claim) => {
@@ -300,7 +308,7 @@ export async function POST(request: Request) {
     addPipelineBreadcrumb("api.extract.done", {
       claimsFound: claims.length,
       forcedClaimCount: forcedClaims.length,
-      claims: transcriptDiagnosticsEnabled && claims.length > 0
+      claims: includeTranscriptDiagnostics && claims.length > 0
         ? limitDiagnosticText(claims.join(" | "), 2000)
         : undefined,
     });

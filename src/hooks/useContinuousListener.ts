@@ -133,6 +133,10 @@ interface DeepgramTranscriptResponse {
   channel: DeepgramChannel;
 }
 
+interface ContinuousListenerOptions {
+  includeTranscriptDiagnostics?: boolean;
+}
+
 function normalizeTranscriptSegment(text: string): string {
   return text
     .toLowerCase()
@@ -142,7 +146,8 @@ function normalizeTranscriptSegment(text: string): string {
 }
 
 export function useContinuousListener(
-  onTranscript: (text: string) => void
+  onTranscript: (text: string) => void,
+  options: ContinuousListenerOptions = {}
 ): UseContinuousListenerReturn {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -173,6 +178,16 @@ export function useContinuousListener(
   const sessionStartTimeRef = useRef<number | null>(null);
   const usageTimerRef = useRef<NodeJS.Timeout | null>(null);
   const stopListeningInternalRef = useRef<(reason: StopReason) => void>(() => {});
+  const onTranscriptRef = useRef(onTranscript);
+  const includeTranscriptDiagnosticsRef = useRef(options.includeTranscriptDiagnostics);
+
+  useEffect(() => {
+    onTranscriptRef.current = onTranscript;
+  }, [onTranscript]);
+
+  useEffect(() => {
+    includeTranscriptDiagnosticsRef.current = options.includeTranscriptDiagnostics;
+  }, [options.includeTranscriptDiagnostics]);
 
   // Update usage timer
   const startUsageTimer = useCallback(() => {
@@ -286,15 +301,18 @@ export function useContinuousListener(
     if (normalized === lastEmittedTextRef.current) return;
     lastEmittedTextRef.current = normalized;
 
-    addPipelineBreadcrumb("transcript.emitted", transcriptDiagnosticData(trimmed));
+    addPipelineBreadcrumb(
+      "transcript.emitted",
+      transcriptDiagnosticData(trimmed, includeTranscriptDiagnosticsRef.current)
+    );
     setTranscript((prev) => {
       const newTranscript = prev ? `${prev} ${trimmed}` : trimmed;
       return newTranscript;
     });
     setInterimText("");
     interimTextRef.current = "";
-    onTranscript(trimmed);
-  }, [onTranscript]);
+    onTranscriptRef.current(trimmed);
+  }, []);
 
   // Internal stop function that accepts a reason
   const stopListeningInternal = useCallback((reason: StopReason) => {
@@ -304,7 +322,10 @@ export function useContinuousListener(
     if (interimTextRef.current.trim()) {
       addPipelineBreadcrumb(
         "transcript.flush_on_stop",
-        transcriptDiagnosticData(interimTextRef.current)
+        transcriptDiagnosticData(
+          interimTextRef.current,
+          includeTranscriptDiagnosticsRef.current
+        )
       );
       emitTranscript(interimTextRef.current);
     }
@@ -457,7 +478,10 @@ export function useContinuousListener(
             if (text.trim()) {
               if (result.is_final) {
                 addPipelineBreadcrumb("deepgram.final_result", {
-                  ...transcriptDiagnosticData(text),
+                  ...transcriptDiagnosticData(
+                    text,
+                    includeTranscriptDiagnosticsRef.current
+                  ),
                   speechFinal: result.speech_final,
                 });
                 emitTranscript(text.trim());

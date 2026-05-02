@@ -56,7 +56,7 @@ npm run dev
 
 Sentry is configured for client, server, edge, masked replay, and manual session feedback. The Feedback button sends a Sentry feedback event with a JSON diagnostics attachment and requests replay inclusion, so bad sessions can still be investigated even when normal replay sampling misses them.
 
-Transcript diagnostics are anonymous in the sense that the app does not attach a user account, name, or email. When `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS` is not `false`, Sentry breadcrumbs and feedback attachments can include recent transcript text and extracted claims to improve claim detection. Raw audio is not stored.
+Transcript diagnostics are anonymous in the sense that the app does not attach a user account, name, or email. When `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS` is not `false`, users can control the Transcript diagnostics toggle in Settings. If enabled, Sentry breadcrumbs and feedback attachments can include recent transcript text and extracted claims to improve claim detection. Raw audio is not stored.
 
 ## Architecture
 

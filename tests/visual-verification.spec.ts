@@ -201,6 +201,10 @@ test.describe("🛡️ Visual: Abuse Prevention UI", () => {
     // Step 3: Verify "Argument structure" toggle exists
     await expect(page.getByText("Argument structure")).toBeVisible();
     await expect(page.getByText("Toulmin breakdown")).toBeVisible();
+    await expect(page.getByText("Transcript diagnostics")).toBeVisible();
+    await expect(
+      page.getByRole("switch", { name: /Transcript diagnostics/i })
+    ).toBeVisible();
 
     // Step 4: Close the modal
     await page.getByRole("button", { name: /Close/i }).click();

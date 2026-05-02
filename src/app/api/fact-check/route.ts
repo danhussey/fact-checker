@@ -7,6 +7,7 @@ import {
   capturePipelineError,
   claimDiagnosticData,
   transcriptDiagnosticData,
+  transcriptDiagnosticsEnabled,
 } from "@/lib/observability";
 import { normalizeSourceUrl } from "@/lib/sourceUrls";
 import crypto from "crypto";
@@ -95,6 +96,8 @@ export async function POST(request: Request) {
     const body = await request.json();
     let claim = body.claim || body.prompt;
     const context = body.context || "";
+    const includeTranscriptDiagnostics =
+      transcriptDiagnosticsEnabled && body.includeTranscriptDiagnostics !== false;
 
     if (!claim || typeof claim !== "string") {
       return Response.json(
@@ -115,9 +118,9 @@ export async function POST(request: Request) {
 
     console.log("[api:fact-check]", { ip, claimLen: claim.length, hasContext: !!context });
     addPipelineBreadcrumb("api.fact_check.start", {
-      ...claimDiagnosticData(claim),
+      ...claimDiagnosticData(claim, includeTranscriptDiagnostics),
       contextLen: context.length,
-      context: transcriptDiagnosticData(context).transcript,
+      context: transcriptDiagnosticData(context, includeTranscriptDiagnostics).transcript,
     });
     debug.factCheck.start(claim);
 
@@ -164,7 +167,7 @@ export async function POST(request: Request) {
       if (controller.signal.aborted) {
         capturePipelineError(new Error("Fact-check request timed out"), {
           route: "/api/fact-check",
-          ...claimDiagnosticData(claim),
+          ...claimDiagnosticData(claim, includeTranscriptDiagnostics),
         });
         debug.factCheck.error(claim, "Request timed out after 45s");
         return Response.json(

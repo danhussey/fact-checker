@@ -38,6 +38,8 @@ const CLAIM_DUPLICATE_THRESHOLD = 0.92;
 const MIN_EXTRACT_TEXT_CHARS = 8;
 const ARGUMENT_STORAGE_KEY = "fact-checker:show-argument-breakdown";
 const TEXT_INPUT_STORAGE_KEY = "fact-checker:show-text-input";
+const TRANSCRIPT_DIAGNOSTICS_STORAGE_KEY =
+  "fact-checker:include-transcript-diagnostics";
 
 type ClaimStatus = "queued" | "checking" | "done";
 
@@ -99,7 +101,11 @@ export default function Home() {
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
   const [showTextInput, setShowTextInput] = useState(enableTextInputEnv);
+  const [includeTranscriptDiagnostics, setIncludeTranscriptDiagnostics] =
+    useState(transcriptDiagnosticsEnabled);
   const [topics, setTopics] = useState<TopicListing[]>([]);
+  const transcriptDiagnosticsIncluded =
+    transcriptDiagnosticsEnabled && includeTranscriptDiagnostics;
   const formRef = useRef<HTMLFormElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const factCheckQueueRef = useRef<QueuedClaim[]>([]);
@@ -181,6 +187,28 @@ export default function Home() {
       console.warn("Failed to save text input preference.", error);
     }
   }, [showTextInput]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(TRANSCRIPT_DIAGNOSTICS_STORAGE_KEY);
+      if (stored !== null) {
+        setIncludeTranscriptDiagnostics(stored === "true");
+      }
+    } catch (error) {
+      console.warn("Failed to read transcript diagnostics preference.", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        TRANSCRIPT_DIAGNOSTICS_STORAGE_KEY,
+        includeTranscriptDiagnostics ? "true" : "false"
+      );
+    } catch (error) {
+      console.warn("Failed to save transcript diagnostics preference.", error);
+    }
+  }, [includeTranscriptDiagnostics]);
 
   const upsertFactCheckLoading = useCallback((id: string, claim: string) => {
     setFactChecks((prev) => {
@@ -287,7 +315,7 @@ export default function Home() {
 
         if (isRecentDone && !forceCheck && !urgent && matchScore >= CLAIM_DUPLICATE_THRESHOLD) {
           addPipelineBreadcrumb("claim.skip_recent_duplicate", {
-            ...claimDiagnosticData(claim),
+            ...claimDiagnosticData(claim, transcriptDiagnosticsIncluded),
             matchScore,
             recordStatus: matchedRecord.status,
           });
@@ -296,7 +324,7 @@ export default function Home() {
 
         if (matchedRecord.status !== "done" && isSameText && !forceCheck && !urgent) {
           addPipelineBreadcrumb("claim.skip_existing_inflight", {
-            ...claimDiagnosticData(claim),
+            ...claimDiagnosticData(claim, transcriptDiagnosticsIncluded),
             recordStatus: matchedRecord.status,
           });
           return;
@@ -317,7 +345,7 @@ export default function Home() {
 
         matchedRecord.status = "queued";
         addPipelineBreadcrumb("claim.requeued", {
-          ...claimDiagnosticData(claim),
+          ...claimDiagnosticData(claim, transcriptDiagnosticsIncluded),
           urgent,
           forceCheck,
           matchScore,
@@ -348,14 +376,14 @@ export default function Home() {
       claimIndexRef.current.set(normalized, id);
       latestClaimIdRef.current = id;
       addPipelineBreadcrumb("claim.queued", {
-        ...claimDiagnosticData(claim),
+        ...claimDiagnosticData(claim, transcriptDiagnosticsIncluded),
         urgent,
         forceCheck,
       });
       upsertFactCheckLoading(id, claim);
       enqueueClaim({ id, claim, context, revision: 1, urgent });
     },
-    [enqueueClaim, findSimilarRecord, upsertFactCheckLoading]
+    [enqueueClaim, findSimilarRecord, transcriptDiagnosticsIncluded, upsertFactCheckLoading]
   );
 
   const processFactCheck = useCallback(async (item: QueuedClaim) => {
@@ -367,7 +395,7 @@ export default function Home() {
     record.status = "checking";
     record.inFlightRevision = item.revision;
     addPipelineBreadcrumb("fact_check.start", {
-      ...claimDiagnosticData(item.claim),
+      ...claimDiagnosticData(item.claim, transcriptDiagnosticsIncluded),
       revision: item.revision,
       contextLen: item.context.length,
     });
@@ -376,7 +404,11 @@ export default function Home() {
       const response = await fetch("/api/fact-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ claim: item.claim, context: item.context }),
+        body: JSON.stringify({
+          claim: item.claim,
+          context: item.context,
+          includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
+        }),
       });
 
       if (!response.ok) {
@@ -409,7 +441,7 @@ export default function Home() {
       capturePipelineError(error, {
         stage: "client-fact-check",
         revision: item.revision,
-        ...claimDiagnosticData(item.claim),
+        ...claimDiagnosticData(item.claim, transcriptDiagnosticsIncluded),
       });
       const current = claimByIdRef.current.get(item.id);
       if (!current || current.revision !== item.revision) {
@@ -420,7 +452,7 @@ export default function Home() {
       current.inFlightRevision = undefined;
       setFactCheckError(item.id, "Failed to fact-check this claim.");
     }
-  }, [setFactCheckError, setFactCheckResult]);
+  }, [setFactCheckError, setFactCheckResult, transcriptDiagnosticsIncluded]);
 
   const processQueue = useCallback(async () => {
     if (isProcessingRef.current || factCheckQueueRef.current.length === 0) return;
@@ -465,13 +497,16 @@ export default function Home() {
   const doExtractClaims = useCallback(async (textToProcess: string, intent: ExtractIntent) => {
     const trimmed = textToProcess.trim();
     if (trimmed.length < MIN_EXTRACT_TEXT_CHARS && !intent.hasDispute && !intent.hasExplicitVerify) {
-      addPipelineBreadcrumb("extract.skip_short_text", transcriptDiagnosticData(trimmed));
+      addPipelineBreadcrumb(
+        "extract.skip_short_text",
+        transcriptDiagnosticData(trimmed, transcriptDiagnosticsIncluded)
+      );
       return;
     }
 
     try {
       addPipelineBreadcrumb("extract.start", {
-        ...transcriptDiagnosticData(textToProcess),
+        ...transcriptDiagnosticData(textToProcess, transcriptDiagnosticsIncluded),
         hasDispute: intent.hasDispute,
         hasExplicitVerify: intent.hasExplicitVerify,
         checkedClaimCount: getCheckedClaims().length,
@@ -483,6 +518,7 @@ export default function Home() {
           newText: textToProcess,
           recentContext: getRecentContext(),
           checkedClaims: getCheckedClaims(),
+          includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
         }),
       });
 
@@ -527,10 +563,16 @@ export default function Home() {
       console.error("Claim extraction error:", error);
       capturePipelineError(error, {
         stage: "client-extract",
-        ...transcriptDiagnosticData(textToProcess),
+        ...transcriptDiagnosticData(textToProcess, transcriptDiagnosticsIncluded),
       });
     }
-  }, [getRecentContext, getCheckedClaims, processQueue, queueClaimCheck]);
+  }, [
+    getRecentContext,
+    getCheckedClaims,
+    processQueue,
+    queueClaimCheck,
+    transcriptDiagnosticsIncluded,
+  ]);
 
   const extractAndProcessClaims = useCallback((newText: string) => {
     const hasDispute = isDisputeCue(newText);
@@ -544,7 +586,7 @@ export default function Home() {
     pendingIntentRef.current.hasExplicitVerify =
       pendingIntentRef.current.hasExplicitVerify || hasExplicitVerify;
     addPipelineBreadcrumb("extract.schedule", {
-      ...transcriptDiagnosticData(newText),
+      ...transcriptDiagnosticData(newText, transcriptDiagnosticsIncluded),
       hasDispute,
       hasExplicitVerify,
     });
@@ -563,7 +605,7 @@ export default function Home() {
       pendingIntentRef.current = { hasDispute: false, hasExplicitVerify: false };
       doExtractClaims(textToProcess, intent);
     }, delayMs);
-  }, [doExtractClaims]);
+  }, [doExtractClaims, transcriptDiagnosticsIncluded]);
 
   const handleTranscript = useCallback((text: string) => {
     const now = Date.now();
@@ -579,7 +621,9 @@ export default function Home() {
     extractAndProcessClaims(text);
   }, [extractAndProcessClaims]);
 
-  const listener = useContinuousListener(handleTranscript);
+  const listener = useContinuousListener(handleTranscript, {
+    includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
+  });
 
   const buildSessionDiagnostics = useCallback((): Record<string, unknown> => {
     const chunks = transcriptHistoryRef.current.slice(-80);
@@ -605,7 +649,8 @@ export default function Home() {
       sentAt: new Date().toISOString(),
       browser: browserContext,
       observability: {
-        transcriptDiagnosticsEnabled,
+        transcriptDiagnosticsDefaultEnabled: transcriptDiagnosticsEnabled,
+        transcriptDiagnosticsIncluded,
         replayRequested: true,
       },
       listener: {
@@ -623,20 +668,20 @@ export default function Home() {
         ...textStats(transcriptText),
         chunkCount: chunks.length,
         visibleTextStats: textStats(transcript),
-        fullText: transcriptDiagnosticsEnabled
+        fullText: transcriptDiagnosticsIncluded
           ? limitDiagnosticText(transcriptText, 12000)
           : undefined,
         chunks: chunks.map((chunk) => ({
           timestamp: new Date(chunk.timestamp).toISOString(),
           ...textStats(chunk.text),
-          text: transcriptDiagnosticsEnabled
+          text: transcriptDiagnosticsIncluded
             ? limitDiagnosticText(chunk.text, 1000)
             : undefined,
         })),
       },
       pendingExtraction: {
         ...textStats(pendingText),
-        text: transcriptDiagnosticsEnabled
+        text: transcriptDiagnosticsIncluded
           ? limitDiagnosticText(pendingText, 4000)
           : undefined,
         hasDispute: pendingIntentRef.current.hasDispute,
@@ -648,7 +693,7 @@ export default function Home() {
         status: factCheck.isLoading ? "loading" : factCheck.error ? "error" : "done",
         error: factCheck.error,
         claimStats: textStats(factCheck.claim),
-        claim: transcriptDiagnosticsEnabled
+        claim: transcriptDiagnosticsIncluded
           ? limitDiagnosticText(factCheck.claim, 1000)
           : undefined,
         result: factCheck.result
@@ -679,6 +724,7 @@ export default function Home() {
     listener.stopReason,
     showArgumentBreakdown,
     showTextInput,
+    transcriptDiagnosticsIncluded,
     transcript,
   ]);
 
@@ -688,13 +734,14 @@ export default function Home() {
     setFeedbackError(null);
     addPipelineBreadcrumb("feedback.send_requested", {
       factCheckCount: factChecks.length,
-      transcriptDiagnosticsEnabled,
+      transcriptDiagnosticsIncluded,
     });
 
     try {
       const eventId = await sendSessionDiagnosticsFeedback(
         feedbackText,
-        buildSessionDiagnostics()
+        buildSessionDiagnostics(),
+        { transcriptDiagnosticsIncluded }
       );
       addPipelineBreadcrumb("feedback.sent", { eventId });
       setFeedbackStatus("sent");
@@ -706,14 +753,22 @@ export default function Home() {
         error instanceof Error ? error.message : "Feedback could not be sent."
       );
     }
-  }, [buildSessionDiagnostics, factChecks.length, feedbackText]);
+  }, [
+    buildSessionDiagnostics,
+    factChecks.length,
+    feedbackText,
+    transcriptDiagnosticsIncluded,
+  ]);
 
   const handleTextSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
     const claim = textInput.trim();
     if (!claim) return;
 
-    addPipelineBreadcrumb("text_claim.submitted", claimDiagnosticData(claim));
+    addPipelineBreadcrumb(
+      "text_claim.submitted",
+      claimDiagnosticData(claim, transcriptDiagnosticsIncluded)
+    );
     queueClaimCheck(claim, {
       context: getRecentContext(),
       urgent: true,
@@ -721,7 +776,13 @@ export default function Home() {
     });
     processQueue();
     setTextInput("");
-  }, [textInput, queueClaimCheck, processQueue, getRecentContext]);
+  }, [
+    getRecentContext,
+    processQueue,
+    queueClaimCheck,
+    textInput,
+    transcriptDiagnosticsIncluded,
+  ]);
 
   useEffect(() => {
     if (listener.isListening) return;
@@ -861,6 +922,33 @@ export default function Home() {
                   />
                 </button>
               </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm text-text font-medium">Transcript diagnostics</p>
+                  <p className="text-xs text-text-muted">
+                    {transcriptDiagnosticsEnabled
+                      ? "Include recent transcript text in feedback and logs."
+                      : "Disabled by deployment config."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="Transcript diagnostics"
+                  aria-checked={transcriptDiagnosticsIncluded}
+                  disabled={!transcriptDiagnosticsEnabled}
+                  onClick={() => setIncludeTranscriptDiagnostics((prev) => !prev)}
+                  className={`relative w-11 h-6 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    transcriptDiagnosticsIncluded ? "bg-text" : "bg-border-strong"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-bg transition-transform ${
+                      transcriptDiagnosticsIncluded ? "translate-x-5" : ""
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -910,9 +998,9 @@ export default function Home() {
               </label>
               <p className="text-xs text-text-muted">
                 Sends anonymous diagnostics
-                {transcriptDiagnosticsEnabled
+                {transcriptDiagnosticsIncluded
                   ? ", including recent transcript text."
-                  : ". Transcript text is disabled in config."}
+                  : ". Transcript text is turned off."}
               </p>
               {feedbackStatus === "sent" && (
                 <p className="text-xs text-success">Feedback sent.</p>

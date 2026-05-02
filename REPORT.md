@@ -86,10 +86,11 @@ Sentry captures client, server, and edge errors, plus masked browser replay. The
 has a manual Feedback button that sends a Sentry feedback event with a JSON diagnostics
 attachment and asks Sentry to include the replay buffer.
 
-Transcript diagnostics are enabled unless `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS=false`
-is set. When enabled, Sentry breadcrumbs and feedback attachments can include recent
-transcript text and extracted claims so claim-detection failures can be debugged. Raw audio
-is not attached, and the app does not send a user account, name, or email with feedback.
+Transcript diagnostics are available unless `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS=false`
+is set, and each browser session can turn them off from Settings. When enabled, Sentry
+breadcrumbs and feedback attachments can include recent transcript text and extracted claims
+so claim-detection failures can be debugged. Raw audio is not attached, and the app does not
+send a user account, name, or email with feedback.
 
 ### IP Anonymization
 All IP addresses are hashed before logging or rate-limit tracking:
