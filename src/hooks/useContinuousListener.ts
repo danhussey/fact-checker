@@ -94,6 +94,7 @@ type StopReason = "user" | "session_limit" | "daily_limit" | "error";
 
 interface UseContinuousListenerReturn {
   isListening: boolean;
+  isStarting: boolean;
   transcript: string;
   interimText: string;
   error: string | null;
@@ -178,6 +179,7 @@ export function useContinuousListener(
   const sessionStartTimeRef = useRef<number | null>(null);
   const usageTimerRef = useRef<NodeJS.Timeout | null>(null);
   const stopListeningInternalRef = useRef<(reason: StopReason) => void>(() => {});
+  const isStartingRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
   const includeTranscriptDiagnosticsRef = useRef(options.includeTranscriptDiagnostics);
 
@@ -317,6 +319,7 @@ export function useContinuousListener(
   // Internal stop function that accepts a reason
   const stopListeningInternal = useCallback((reason: StopReason) => {
     isStoppingRef.current = true;
+    isStartingRef.current = false;
     addPipelineBreadcrumb("listener.stop", { reason });
 
     if (interimTextRef.current.trim()) {
@@ -339,7 +342,11 @@ export function useContinuousListener(
     mediaRecorderRef.current = null;
 
     // Close WebSocket
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
+    if (
+      socketRef.current &&
+      (socketRef.current.readyState === WebSocket.CONNECTING ||
+        socketRef.current.readyState === WebSocket.OPEN)
+    ) {
       socketRef.current.close(1000);
     }
     socketRef.current = null;
@@ -351,6 +358,7 @@ export function useContinuousListener(
     }
 
     setIsListening(false);
+    setConnectionStatus("idle");
     setInterimText("");
     interimTextRef.current = "";
   }, [emitTranscript, stopUsageTimer]);
@@ -361,6 +369,9 @@ export function useContinuousListener(
   }, [stopListeningInternal]);
 
   const startListening = useCallback(async () => {
+    if (isStartingRef.current || isListening) return;
+
+    isStartingRef.current = true;
     addPipelineBreadcrumb("listener.start_requested");
     setError(null);
     setTranscript("");
@@ -380,11 +391,28 @@ export function useContinuousListener(
           sampleRate: 16000,
         },
       });
+
+      if (isStoppingRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        isStartingRef.current = false;
+        setConnectionStatus("idle");
+        return;
+      }
+
       streamRef.current = stream;
       addPipelineBreadcrumb("listener.microphone_ready");
 
       // Get temporary token
       const tokenResponse = await getDeepgramToken();
+      if (isStoppingRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        if (streamRef.current === stream) {
+          streamRef.current = null;
+        }
+        isStartingRef.current = false;
+        setConnectionStatus("idle");
+        return;
+      }
       if (!tokenResponse) {
         throw new Error("Failed to get transcription token");
       }
@@ -426,6 +454,7 @@ export function useContinuousListener(
           return;
         }
 
+        isStartingRef.current = false;
         setConnectionStatus("connected");
         setIsListening(true);
         addPipelineBreadcrumb("deepgram.connected");
@@ -500,6 +529,7 @@ export function useContinuousListener(
 
       socket.onerror = (event) => {
         console.error("WebSocket error:", event);
+        isStartingRef.current = false;
         setConnectionStatus("error");
         setError("Connection error. Please try again.");
         capturePipelineError(new Error("Deepgram WebSocket error"), {
@@ -508,6 +538,7 @@ export function useContinuousListener(
       };
 
       socket.onclose = (event) => {
+        isStartingRef.current = false;
         addPipelineBreadcrumb("deepgram.closed", {
           code: event.code,
           wasClean: event.wasClean,
@@ -526,6 +557,24 @@ export function useContinuousListener(
       };
 
     } catch (err) {
+      isStartingRef.current = false;
+      if (socketRef.current) {
+        if (
+          socketRef.current.readyState === WebSocket.CONNECTING ||
+          socketRef.current.readyState === WebSocket.OPEN
+        ) {
+          socketRef.current.close(1000);
+        }
+        socketRef.current = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      if (isStoppingRef.current) {
+        setConnectionStatus("idle");
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
       setConnectionStatus("error");
       capturePipelineError(err, { stage: "listener-start" });
@@ -538,7 +587,7 @@ export function useContinuousListener(
         setError(`Could not start listening: ${errorMessage}`);
       }
     }
-  }, [emitTranscript, getMimeType, startUsageTimer]);
+  }, [emitTranscript, getMimeType, isListening, startUsageTimer]);
 
   const stopListening = useCallback(() => {
     stopListeningInternal("user");
@@ -565,6 +614,7 @@ export function useContinuousListener(
 
   return {
     isListening,
+    isStarting: connectionStatus === "connecting",
     transcript,
     interimText,
     error,

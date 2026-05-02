@@ -144,6 +144,31 @@ test.describe("🛡️ Visual: Abuse Prevention UI", () => {
     await expect(micButton).toHaveClass(/bg-text/);
   });
 
+  test("Microphone button shows startup state immediately", async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia: () => new Promise<MediaStream>(() => {}),
+        },
+      });
+    });
+
+    await page.goto("/");
+
+    await page.getByRole("button", { name: /Start listening/i }).click();
+
+    await expect(
+      page.getByRole("button", { name: /Stop listening/i })
+    ).toBeVisible();
+    await expect(page.getByText("Starting microphone")).toBeVisible();
+
+    await page.getByRole("button", { name: /Stop listening/i }).click();
+    await expect(
+      page.getByRole("button", { name: /Start listening/i })
+    ).toBeVisible();
+  });
+
   test("Session usage state is initialized", async ({ page }) => {
     await page.goto("/");
 

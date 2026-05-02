@@ -808,7 +808,9 @@ export default function Home() {
   }, [factChecks.length]);
 
   const canShowTextInput = showTextInput;
+  const isRecordingControlActive = listener.isListening || listener.isStarting;
   const listenLabel = "Start listening";
+  const recordingControlLabel = listener.isStarting ? "Starting" : "Stop";
   const statusLabelClass = canShowTextInput ? "hidden sm:inline" : "";
   const showTopicListings = isDev && showResearchTopicsEnv !== "false";
 
@@ -1027,7 +1029,25 @@ export default function Home() {
         <div className="max-w-2xl mx-auto">
           {factChecks.length === 0 ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center animate-fade-up">
-              {listener.isListening ? (
+              {listener.isStarting ? (
+                <>
+                  <div className="w-20 h-20 mb-6 rounded-full bg-surface flex items-center justify-center" style={{ boxShadow: "var(--shadow-md)" }}>
+                    <svg
+                      className="w-9 h-9 text-text animate-pulse-subtle"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M6 6h12v12H6z" />
+                    </svg>
+                  </div>
+                  <p className="text-text font-medium text-lg mb-2">
+                    Starting microphone
+                  </p>
+                  <p className="text-text-muted text-sm max-w-xs">
+                    Connecting to the microphone and evidence pipeline.
+                  </p>
+                </>
+              ) : listener.isListening ? (
                 <>
                   <div className="w-20 h-20 mb-6 rounded-full bg-surface flex items-center justify-center" style={{ boxShadow: "var(--shadow-md)" }}>
                     <svg
@@ -1221,41 +1241,35 @@ export default function Home() {
                 {/* Main microphone button */}
                 <button
                   type="button"
-                  onClick={listener.isListening ? listener.stopListening : listener.startListening}
+                  onClick={
+                    isRecordingControlActive
+                      ? listener.stopListening
+                      : listener.startListening
+                  }
                   className={`
                   flex items-center justify-center gap-2 rounded-full font-medium text-sm transition-all duration-200 whitespace-nowrap
-                  ${listener.isListening
+                  ${isRecordingControlActive
                     ? "bg-text text-bg"
                     : "bg-text text-bg hover:opacity-90"
                   }
                   ${canShowTextInput ? "h-11 w-11 sm:w-auto sm:px-4" : "h-11 px-6"}
                 `}
                   style={{ boxShadow: "var(--shadow-sm)" }}
-                  aria-label={listener.isListening ? "Stop listening" : "Start listening"}
+                  aria-label={
+                    isRecordingControlActive ? "Stop listening" : "Start listening"
+                  }
                 >
-                  {listener.isListening ? (
+                  {isRecordingControlActive ? (
                     <>
-                      <svg className="w-4 h-4 sm:hidden" fill="currentColor" viewBox="0 0 24 24">
+                      <svg
+                        className={`w-4 h-4 ${listener.isStarting ? "animate-pulse-subtle" : ""}`}
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                      >
                         <path d="M6 6h12v12H6z" />
                       </svg>
-                      {listener.connectionStatus === "connecting" && (
-                        <>
-                          <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
-                          <span className={statusLabelClass}>Connecting</span>
-                        </>
-                      )}
-                      {listener.connectionStatus === "connected" && (
-                        <>
-                          <span className="w-2 h-2 rounded-full bg-error" />
-                          <span className={statusLabelClass}>Stop</span>
-                        </>
-                      )}
-                      {listener.connectionStatus === "error" && (
-                        <>
-                          <span className="w-2 h-2 rounded-full bg-error" />
-                          <span className={statusLabelClass}>Error</span>
-                        </>
-                      )}
+                      <span className={statusLabelClass}>{recordingControlLabel}</span>
                     </>
                   ) : (
                     <>
