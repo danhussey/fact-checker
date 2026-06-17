@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "eval:claims": "node evals/run_eval.mjs --labels evals/labels.jsonl --predictions evals/predictions.example.jsonl"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.80",
