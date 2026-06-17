@@ -5,25 +5,44 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Real-time fact-checking PWA. Listens to audio, extracts claims, and fact-checks them using AI.
+Real-time fact-checking PWA for noisy live speech. It listens to audio, transcribes speech, extracts checkable claims, deduplicates repeated claims, and verifies them with structured model outputs.
 
 **[Live Demo](https://fact-checker-theta.vercel.app)**
 
+## Evaluation Angle
+
+The hard problem is not drawing verdict cards in a browser. It is claim extraction under streaming, noisy, adversarial speech: sarcasm, self-correction, interruptions, ambiguous pronouns, repeated claims, and model-generated citations that may not exist.
+
+The repository includes an offline eval scaffold in `evals/` for reviewing claim-extraction behavior without API keys. It measures:
+
+- claim recall against labeled transcript snippets,
+- duplicate extraction rate,
+- unsupported or unverified verdict rate,
+- mean reported latency.
+
+```bash
+npm run eval:claims
+```
+
+The starter transcript set covers sarcasm, self-correction, debate interruptions, ambiguous pronouns, and hallucinated citations. The example predictions file is intentionally small; replace it with exported model outputs to compare prompts or model versions.
+
 ## How It Works
 
-1. Click "Start Listening" to capture audio from your microphone
-2. Speech is transcribed in real time via Deepgram
-3. AI extracts fact-checkable claims from the transcript
-4. Each claim is verified and rated (true, false, mostly true, etc.)
+1. Capture microphone audio in the browser.
+2. Stream speech-to-text through Deepgram.
+3. Maintain rolling transcript context for fragmented or referential speech.
+4. Extract fact-checkable claims with a structured-output model call.
+5. Suppress duplicates before verification.
+6. Verify each claim and return a structured verdict, evidence summary, and source names.
 
 ## Stack
 
 - **Next.js 16** - App Router
 - **Deepgram** - Streaming speech-to-text
-- **xAI Grok** - Claim extraction & fact-checking
+- **xAI Grok** - Claim extraction and fact-checking
 - **Vercel AI SDK** - Structured outputs
 - **Vercel** - Deployment
-- **Sentry** - Error monitoring, masked replay, and manual session diagnostics
+- **Sentry** - Error monitoring, masked replay, structured pipeline logs, and manual session diagnostics
 
 ## Quick Start
 
@@ -33,7 +52,7 @@ npm install
 
 # Set up environment
 cp .env.local.example .env.local
-# Add your OPENAI_API_KEY and XAI_API_KEY
+# Add your DEEPGRAM_API_KEY, OPENAI_API_KEY, and XAI_API_KEY
 
 # Run
 npm run dev
@@ -63,8 +82,8 @@ For claim-extraction review, search Sentry Logs for `area:fact-checker.pipeline`
 
 ## Architecture
 
-```
-Browser Mic → Deepgram → Transcript → Grok (extract) → Grok (verify) → UI
+```text
+Browser Mic -> Deepgram -> Transcript -> Grok extract -> duplicate filter -> Grok verify -> UI
 ```
 
 See [REPORT.md](REPORT.md) for detailed technical documentation.
