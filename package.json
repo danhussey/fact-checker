@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "playwright test --config playwright.unit.config.ts",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "eval:claims": "node evals/run_eval.mjs --labels evals/labels.jsonl --predictions evals/predictions.example.jsonl"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.80",
