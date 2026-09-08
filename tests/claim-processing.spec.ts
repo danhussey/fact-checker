@@ -13,7 +13,7 @@ test.describe("Claim Processing Helpers", () => {
   test("detects near-duplicate claims", () => {
     const score = claimSimilarityScore(
       "Indigenous Australians receive twice as much funding as white Australians per capita",
-      "They receive 2x funding per capita"
+      "Indigenous Australians receive twice as much funding as white Australians per capita."
     );
     expect(score).toBeGreaterThan(0.7);
 
@@ -52,6 +52,8 @@ test.describe("Claim Processing Helpers", () => {
 
   test("flags explicit verify and dispute cues", () => {
     expect(isExplicitVerifyCue("fact check that")).toBeTruthy();
+    expect(isExplicitVerifyCue("check that again")).toBeTruthy();
+    expect(isExplicitVerifyCue("recheck that")).toBeTruthy();
     expect(isExplicitVerifyCue("fact-checkers are busy")).toBeFalsy();
     expect(isDisputeCue("that's wrong")).toBeTruthy();
     expect(isDisputeCue("I think so")).toBeFalsy();

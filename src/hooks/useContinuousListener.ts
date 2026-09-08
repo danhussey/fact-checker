@@ -7,6 +7,12 @@ import {
   capturePipelineError,
   transcriptDiagnosticData,
 } from "@/lib/observability";
+import {
+  drainTranscriptionSocket,
+  TranscriptSegmentTracker,
+  type DeepgramTranscriptResult,
+  type TranscriptSegmentMetadata,
+} from "@/lib/transcriptSegments";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -81,48 +87,12 @@ interface UseContinuousListenerReturn {
   stopReason: StopReason | null;
 }
 
-// Deepgram transcript response structure
-interface DeepgramWord {
-  word: string;
-  start: number;
-  end: number;
-  confidence: number;
-}
-
-interface DeepgramAlternative {
-  transcript: string;
-  confidence: number;
-  words: DeepgramWord[];
-}
-
-interface DeepgramChannel {
-  alternatives: DeepgramAlternative[];
-}
-
-interface DeepgramTranscriptResponse {
-  type: "Results";
-  channel_index: number[];
-  duration: number;
-  start: number;
-  is_final: boolean;
-  speech_final: boolean;
-  channel: DeepgramChannel;
-}
-
 interface ContinuousListenerOptions {
   includeTranscriptDiagnostics?: boolean;
 }
 
-function normalizeTranscriptSegment(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[.,!?;:'"]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 export function useContinuousListener(
-  onTranscript: (text: string) => void,
+  onTranscript: (text: string, metadata?: TranscriptSegmentMetadata) => void,
   options: ContinuousListenerOptions = {}
 ): UseContinuousListenerReturn {
   const [isListening, setIsListening] = useState(false);
@@ -146,7 +116,9 @@ export function useContinuousListener(
   const socketRef = useRef<WebSocket | null>(null);
   const isStoppingRef = useRef(false);
   const interimTextRef = useRef("");
-  const lastEmittedTextRef = useRef("");
+  const sessionGenerationRef = useRef(0);
+  const stopDrainRef = useRef<Promise<void> | null>(null);
+  const audioSendQueueRef = useRef<Promise<void>>(Promise.resolve());
   const sessionStartTimeRef = useRef<number | null>(null);
   const usageTimerRef = useRef<NodeJS.Timeout | null>(null);
   const stopListeningInternalRef = useRef<(reason: StopReason) => void>(() => {});
@@ -217,7 +189,7 @@ export function useContinuousListener(
   }, []);
 
   // Get short-lived Deepgram auth from our API, reusing it only while valid.
-  const getDeepgramToken = async (): Promise<{ token: string } | null> => {
+  const getDeepgramToken = async (): Promise<{ token: string }> => {
     try {
       const cachedToken = tokenCacheRef.current;
       if (
@@ -260,10 +232,9 @@ export function useContinuousListener(
       console.error("Token fetch error:", err);
       tokenCacheRef.current = null;
       capturePipelineError(err, { stage: "deepgram-token" });
-      if (err instanceof Error) {
-        setError(err.message);
-      }
-      return null;
+      // The session-aware start handler owns UI errors. A cancelled start's
+      // delayed token failure must not change a newer session's state.
+      throw err;
     }
   };
 
@@ -287,73 +258,70 @@ export function useContinuousListener(
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || "audio/webm";
   }, []);
 
-  const emitTranscript = useCallback((text: string) => {
+  const emitTranscript = useCallback((text: string, metadata: TranscriptSegmentMetadata) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-
-    const normalized = normalizeTranscriptSegment(trimmed);
-    if (normalized === lastEmittedTextRef.current) return;
-    lastEmittedTextRef.current = normalized;
+    const timing: TranscriptSegmentMetadata = {
+      segmentId: metadata.segmentId,
+      speechEndAt: metadata.speechEndAt,
+      receivedAt: metadata.receivedAt,
+    };
 
     addPipelineBreadcrumb(
       "transcript.emitted",
-      transcriptDiagnosticData(trimmed, includeTranscriptDiagnosticsRef.current)
+      {
+        ...transcriptDiagnosticData(trimmed, includeTranscriptDiagnosticsRef.current),
+        ...timing,
+        transcriptionLatencyMs: Math.max(0, metadata.receivedAt - metadata.speechEndAt),
+      }
     );
     setTranscript((prev) => {
       const newTranscript = prev ? `${prev} ${trimmed}` : trimmed;
       return newTranscript;
     });
-    setInterimText("");
-    interimTextRef.current = "";
-    onTranscriptRef.current(trimmed);
+    onTranscriptRef.current(trimmed, timing);
   }, []);
 
   // Internal stop function that accepts a reason
   const stopListeningInternal = useCallback((reason: StopReason) => {
+    if (isStoppingRef.current) return;
     isStoppingRef.current = true;
     isStartingRef.current = false;
     addPipelineBreadcrumb("listener.stop", { reason });
-
-    if (interimTextRef.current.trim()) {
-      addPipelineBreadcrumb(
-        "transcript.flush_on_stop",
-        transcriptDiagnosticData(
-          interimTextRef.current,
-          includeTranscriptDiagnosticsRef.current
-        )
-      );
-      emitTranscript(interimTextRef.current);
-    }
-
     stopUsageTimer(reason);
 
-    // Stop MediaRecorder
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
+    const recorder = mediaRecorderRef.current;
+    const socket = socketRef.current;
+    // MediaRecorder's final dataavailable event precedes stop. Waiting for
+    // onstop and our ordered conversion queue keeps that final audio chunk.
+    const audioDrained = recorder && recorder.state !== "inactive"
+      ? new Promise<void>((resolve) => {
+          recorder.onstop = () => { void audioSendQueueRef.current.then(resolve); };
+          recorder.stop();
+        })
+      : audioSendQueueRef.current;
     mediaRecorderRef.current = null;
 
-    // Close WebSocket
-    if (
-      socketRef.current &&
-      (socketRef.current.readyState === WebSocket.CONNECTING ||
-        socketRef.current.readyState === WebSocket.OPEN)
-    ) {
-      socketRef.current.close(1000);
+    if (socket) {
+      const drain = drainTranscriptionSocket(socket, audioDrained);
+      stopDrainRef.current = drain;
+      void drain.then(() => {
+        if (stopDrainRef.current === drain) stopDrainRef.current = null;
+        if (socketRef.current === socket) socketRef.current = null;
+      });
     }
-    socketRef.current = null;
 
-    // Stop microphone stream
+    // The microphone stops immediately; only already captured audio drains.
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
 
     setIsListening(false);
-    setConnectionStatus("idle");
+    setConnectionStatus(reason === "error" ? "error" : "idle");
     setInterimText("");
     interimTextRef.current = "";
-  }, [emitTranscript, stopUsageTimer]);
+  }, [stopUsageTimer]);
 
   // Keep ref updated for use in interval
   useEffect(() => {
@@ -361,15 +329,23 @@ export function useContinuousListener(
   }, [stopListeningInternal]);
 
   const startListening = useCallback(async () => {
+    if (stopDrainRef.current) {
+      const waitingGeneration = sessionGenerationRef.current;
+      await stopDrainRef.current;
+      // A restart queued during drain must not reopen the microphone after
+      // unmount, or race another start that already began the new session.
+      if (sessionGenerationRef.current !== waitingGeneration) return;
+    }
     if (isStartingRef.current || isListening) return;
 
     isStartingRef.current = true;
+    const generation = ++sessionGenerationRef.current;
     addPipelineBreadcrumb("listener.start_requested");
     setError(null);
     setTranscript("");
     setInterimText("");
     interimTextRef.current = "";
-    lastEmittedTextRef.current = "";
+    audioSendQueueRef.current = Promise.resolve();
     setConnectionStatus("connecting");
     setStopReason(null);
     isStoppingRef.current = false;
@@ -384,10 +360,12 @@ export function useContinuousListener(
         },
       });
 
-      if (isStoppingRef.current) {
+      if (isStoppingRef.current || sessionGenerationRef.current !== generation) {
         stream.getTracks().forEach((track) => track.stop());
-        isStartingRef.current = false;
-        setConnectionStatus("idle");
+        if (sessionGenerationRef.current === generation) {
+          isStartingRef.current = false;
+          setConnectionStatus("idle");
+        }
         return;
       }
 
@@ -396,17 +374,16 @@ export function useContinuousListener(
 
       // Get temporary token
       const tokenResponse = await getDeepgramToken();
-      if (isStoppingRef.current) {
+      if (isStoppingRef.current || sessionGenerationRef.current !== generation) {
         stream.getTracks().forEach((track) => track.stop());
         if (streamRef.current === stream) {
           streamRef.current = null;
         }
-        isStartingRef.current = false;
-        setConnectionStatus("idle");
+        if (sessionGenerationRef.current === generation) {
+          isStartingRef.current = false;
+          setConnectionStatus("idle");
+        }
         return;
-      }
-      if (!tokenResponse) {
-        throw new Error("Failed to get transcription token");
       }
       const { token } = tokenResponse;
       addPipelineBreadcrumb("listener.deepgram_token_received");
@@ -421,8 +398,12 @@ export function useContinuousListener(
         model: "nova-3",
         language: detectedLanguage,
         smart_format: "true",
+        // Avoid Smart Format's entity-completion wait (up to three seconds).
+        // Final fragments are coalesced by the extraction scheduler.
+        no_delay: "true",
+        endpointing: "300",
         interim_results: "true",
-        utterance_end_ms: "1500",
+        utterance_end_ms: "1000",
         vad_events: "true",
         punctuate: "true",
         filler_words: "false",
@@ -433,41 +414,62 @@ export function useContinuousListener(
       // Open WebSocket connection
       const socket = new WebSocket(wsUrl, ["bearer", token]);
       socketRef.current = socket;
+      let segmentTracker: TranscriptSegmentTracker | null = null;
 
       socket.onopen = () => {
-        if (isStoppingRef.current) {
+        if (isStoppingRef.current || sessionGenerationRef.current !== generation) {
           socket.close();
           return;
         }
 
-        isStartingRef.current = false;
-        setConnectionStatus("connected");
-        setIsListening(true);
-        addPipelineBreadcrumb("deepgram.connected");
+        try {
+          isStartingRef.current = false;
+          setConnectionStatus("connected");
+          setIsListening(true);
+          addPipelineBreadcrumb("deepgram.connected");
 
-        // Start usage tracking timer
-        startUsageTimer();
+          // Start usage tracking timer
+          startUsageTimer();
 
-        // Start MediaRecorder to capture audio
-        const mimeType = getMimeType();
-        const mediaRecorder = new MediaRecorder(stream, {
-          mimeType,
-          audioBitsPerSecond: 128000,
-        });
-        mediaRecorderRef.current = mediaRecorder;
+          // Start MediaRecorder to capture audio
+          const mimeType = getMimeType();
+          const mediaRecorder = new MediaRecorder(stream, {
+            mimeType,
+            audioBitsPerSecond: 128000,
+          });
+          mediaRecorderRef.current = mediaRecorder;
 
-        mediaRecorder.ondataavailable = async (event) => {
-          if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) {
-            const arrayBuffer = await event.data.arrayBuffer();
-            socket.send(arrayBuffer);
-          }
-        };
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size === 0 || socket.readyState !== WebSocket.OPEN ||
+                sessionGenerationRef.current !== generation) return;
+            // Blob conversion is asynchronous; preserve audio order even if a
+            // later, smaller chunk converts before an earlier chunk.
+            audioSendQueueRef.current = audioSendQueueRef.current.then(async () => {
+              const arrayBuffer = await event.data.arrayBuffer();
+              if (socket.readyState === WebSocket.OPEN &&
+                  sessionGenerationRef.current === generation) socket.send(arrayBuffer);
+            }).catch((err) => {
+              capturePipelineError(err, { stage: "transcription-audio" });
+              if (sessionGenerationRef.current === generation && !isStoppingRef.current) {
+                setError("Could not stream microphone audio. Please try again.");
+                stopListeningInternalRef.current("error");
+              }
+            });
+          };
 
-        // Capture audio every 250ms for smooth streaming
-        mediaRecorder.start(250);
+          // Relative provider timestamps start when microphone capture starts.
+          const captureStartedAt = Date.now();
+          segmentTracker = new TranscriptSegmentTracker(`${captureStartedAt}-${generation}`, captureStartedAt);
+          mediaRecorder.start(100);
+        } catch (err) {
+          capturePipelineError(err, { stage: "transcription-recorder" });
+          setError("Could not record microphone audio. Please try again.");
+          stopListeningInternalRef.current("error");
+        }
       };
 
       socket.onmessage = (event) => {
+        if (sessionGenerationRef.current !== generation || socketRef.current !== socket) return;
         try {
           const data = JSON.parse(event.data);
 
@@ -480,33 +482,30 @@ export function useContinuousListener(
             addPipelineBreadcrumb("deepgram.utterance_end", {
               hadInterimText: Boolean(interimTextRef.current.trim()),
             });
-            if (interimTextRef.current.trim()) {
-              emitTranscript(interimTextRef.current);
-            }
+            // This only reports a gap after speech. Interim wording may still
+            // be revised, so only provider is_final Results become claims.
             return;
           }
 
           if (data.type === "Results") {
-            const result = data as DeepgramTranscriptResponse;
+            const result = data as DeepgramTranscriptResult;
             const text = result.channel?.alternatives?.[0]?.transcript || "";
-
-            if (text.trim()) {
-              if (result.is_final) {
-                addPipelineBreadcrumb("deepgram.final_result", {
-                  ...transcriptDiagnosticData(
-                    text,
-                    includeTranscriptDiagnosticsRef.current
-                  ),
-                  speechFinal: result.speech_final,
-                });
-                emitTranscript(text.trim());
-              } else {
-                // Interim result - show as faded text
-                const trimmed = text.trim();
-                interimTextRef.current = trimmed;
-                setInterimText(trimmed);
-              }
+            if (!segmentTracker) return;
+            if (isStoppingRef.current && !result.is_final) return;
+            const segment = segmentTracker.consume(result, Date.now());
+            if (segment) {
+              addPipelineBreadcrumb("deepgram.final_result", {
+                ...transcriptDiagnosticData(
+                  text,
+                  includeTranscriptDiagnosticsRef.current
+                ),
+                speechFinal: result.speech_final,
+              });
+              emitTranscript(segment.text, segment);
             }
+            const preview = isStoppingRef.current ? "" : segmentTracker.interimText;
+            interimTextRef.current = preview;
+            setInterimText(preview);
           }
         } catch (err) {
           console.error("Error parsing Deepgram message:", err);
@@ -514,6 +513,7 @@ export function useContinuousListener(
       };
 
       socket.onerror = (event) => {
+        if (sessionGenerationRef.current !== generation || isStoppingRef.current) return;
         console.error("WebSocket error:", event);
         isStartingRef.current = false;
         setConnectionStatus("error");
@@ -521,28 +521,33 @@ export function useContinuousListener(
         capturePipelineError(new Error("Deepgram WebSocket error"), {
           stage: "deepgram-websocket",
         });
+        stopListeningInternalRef.current("error");
       };
 
       socket.onclose = (event) => {
+        if (sessionGenerationRef.current !== generation) return;
         isStartingRef.current = false;
         addPipelineBreadcrumb("deepgram.closed", {
           code: event.code,
           wasClean: event.wasClean,
         }, event.code === 1000 ? "info" : "warning");
-        if (!isStoppingRef.current && event.code !== 1000) {
+        if (!isStoppingRef.current) {
+          stopListeningInternalRef.current("error");
           setConnectionStatus("error");
           setError("Connection closed unexpectedly. Please try again.");
           capturePipelineError(new Error("Deepgram WebSocket closed unexpectedly"), {
             stage: "deepgram-websocket",
             code: event.code,
           });
-        } else {
-          setConnectionStatus("idle");
         }
         setIsListening(false);
+        setInterimText("");
+        interimTextRef.current = "";
+        if (socketRef.current === socket) socketRef.current = null;
       };
 
     } catch (err) {
+      if (sessionGenerationRef.current !== generation) return;
       isStartingRef.current = false;
       if (socketRef.current) {
         if (
@@ -583,13 +588,14 @@ export function useContinuousListener(
   useEffect(() => {
     return () => {
       isStoppingRef.current = true;
+      sessionGenerationRef.current += 1;
       if (usageTimerRef.current) {
         clearInterval(usageTimerRef.current);
       }
       if (mediaRecorderRef.current?.state === "recording") {
         mediaRecorderRef.current.stop();
       }
-      if (socketRef.current?.readyState === WebSocket.OPEN) {
+      if (socketRef.current && socketRef.current.readyState < WebSocket.CLOSING) {
         socketRef.current.close(1000);
       }
       if (streamRef.current) {

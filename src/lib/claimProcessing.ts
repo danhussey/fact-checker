@@ -1,6 +1,5 @@
-"use client";
-
-import { claimFactsDiffer } from "./claimComparison";
+import { claimFactsDiffer, normalizeClaimText } from "./claimComparison";
+export { areClaimsEquivalent } from "./claimComparison";
 
 const STOP_WORDS = new Set([
   "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
@@ -25,7 +24,8 @@ const DISPUTE_PATTERNS = [
 ];
 
 const VERIFY_PATTERNS = [
-  /\b(fact[- ]?check|verify|check if)\b/i,
+  /\b(fact[- ]?check|verify|check if|re[- ]?check|double[- ]?check)\b/i,
+  /\bcheck\s+(that|this|it|again|whether)\b/i,
   /\b(is that true|is this true|is it true|is that correct)\b/i,
 ];
 
@@ -40,23 +40,7 @@ const NUMBER_DELAY_MS = 450;
 const CONTINUATION_DELAY_MS = 650;
 
 export function normalizeClaim(claim: string): string {
-  return claim
-    .toLowerCase()
-    .trim()
-    .replace(/\bgigabytes?\b/gi, "gb")
-    .replace(/\bmegabytes?\b/gi, "mb")
-    .replace(/\bterabytes?\b/gi, "tb")
-    .replace(/\bkilobytes?\b/gi, "kb")
-    .replace(/\bmillion\b/gi, "m")
-    .replace(/\bbillion\b/gi, "b")
-    .replace(/\bthousand\b/gi, "k")
-    .replace(/\bdollars?\b/gi, "$")
-    .replace(/\bpounds?\b/gi, "£")
-    .replace(/\beuros?\b/gi, "€")
-    .replace(/\bpercent\b/gi, "%")
-    .replace(/\bper\s*cent\b/gi, "%")
-    .replace(/\s+/g, " ")
-    .replace(/[.,!?;:'"]/g, "");
+  return normalizeClaimText(claim);
 }
 
 function contentTokens(text: string): Set<string> {
@@ -65,6 +49,7 @@ function contentTokens(text: string): Set<string> {
   );
 }
 
+/** Lexical hint for display/search only. Never use this score for dedup or revisions. */
 export function claimSimilarityScore(a: string, b: string): number {
   const normalizedA = normalizeClaim(a);
   const normalizedB = normalizeClaim(b);

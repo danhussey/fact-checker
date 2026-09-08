@@ -11,12 +11,14 @@ interface FactCheckCardProps {
   factCheck: FactCheck;
   showArgumentBreakdown?: boolean;
   showSourceChips?: boolean;
+  onRetry?: () => void;
 }
 
 export function FactCheckCard({
   factCheck,
   showArgumentBreakdown = true,
   showSourceChips = true,
+  onRetry,
 }: FactCheckCardProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -43,7 +45,7 @@ export function FactCheckCard({
         {/* Top row: Verdict badge and timestamp */}
         <div className="flex items-center justify-between mb-2">
           {isLoading ? (
-            <VerdictBadgeLoading />
+            <VerdictBadgeLoading label={factCheck.status === "queued" ? "Queued…" : factCheck.status === "retrying" ? "Retrying…" : "Checking..."} />
           ) : hasResult ? (
             <VerdictBadge
               verdict={result.verdict}
@@ -104,6 +106,7 @@ export function FactCheckCard({
       {error && (
         <div className="px-5 pb-4 text-sm text-error">
           {error}
+          {onRetry && <button onClick={onRetry} className="ml-3 underline">Retry check</button>}
         </div>
       )}
     </div>

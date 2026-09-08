@@ -5,68 +5,25 @@ import Link from "next/link";
 import { useContinuousListener } from "@/hooks/useContinuousListener";
 import { FactCheckCard } from "@/components/FactCheckCard";
 import { TopicChip } from "@/components/TopicChip";
-import type { FactCheck, StructuredFactCheck, TopicListing } from "@/lib/types";
+import { useClaimPipeline } from "@/hooks/useClaimPipeline";
+import { useStoredBoolean } from "@/hooks/useStoredBoolean";
+import type { TranscriptSegmentMetadata } from "@/lib/transcriptSegments";
 import { getTopicListings } from "@/lib/research/loader";
 import {
-  claimSimilarityScore,
-  getExtractionDelayMs,
-  isDisputeCue,
-  isExplicitVerifyCue,
-  normalizeClaim,
-} from "@/lib/claimProcessing";
-import {
   addPipelineBreadcrumb,
-  addPipelineLog,
   capturePipelineError,
   claimDiagnosticData,
   limitDiagnosticText,
   sendSessionDiagnosticsFeedback,
   textStats,
-  transcriptDiagnosticData,
   transcriptDiagnosticsEnabled,
 } from "@/lib/observability";
 import { USAGE_LIMITS } from "@/lib/types";
 
-interface TranscriptChunk {
-  text: string;
-  timestamp: number;
-}
-
-const CONTEXT_WINDOW_MS = 300000; // 5 minutes of context
-const CLAIM_TTL_MS = 5 * 60 * 1000;
-const CLAIM_SIMILARITY_THRESHOLD = 0.78;
-const CLAIM_DUPLICATE_THRESHOLD = 0.92;
-const MIN_EXTRACT_TEXT_CHARS = 8;
 const ARGUMENT_STORAGE_KEY = "fact-checker:show-argument-breakdown";
 const TEXT_INPUT_STORAGE_KEY = "fact-checker:show-text-input";
 const TRANSCRIPT_DIAGNOSTICS_STORAGE_KEY =
   "fact-checker:include-transcript-diagnostics";
-
-type ClaimStatus = "queued" | "checking" | "done";
-
-interface ClaimRecord {
-  id: string;
-  claim: string;
-  normalized: string;
-  revision: number;
-  status: ClaimStatus;
-  lastUpdatedAt: number;
-  lastCheckedAt?: number;
-  inFlightRevision?: number;
-}
-
-interface QueuedClaim {
-  id: string;
-  claim: string;
-  context: string;
-  revision: number;
-  urgent: boolean;
-}
-
-interface ExtractIntent {
-  hasDispute: boolean;
-  hasExplicitVerify: boolean;
-}
 
 type FeedbackStatus = "idle" | "sending" | "sent" | "error";
 
@@ -92,7 +49,6 @@ function formatTimeRemaining(ms: number): string {
 }
 
 export default function Home() {
-  const [factChecks, setFactChecks] = useState<FactCheck[]>([]);
   const [transcript, setTranscript] = useState("");
   const [textInput, setTextInput] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -100,29 +56,22 @@ export default function Home() {
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackStatus, setFeedbackStatus] = useState<FeedbackStatus>("idle");
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
-  const [showArgumentBreakdown, setShowArgumentBreakdown] = useState(false);
-  const [showTextInput, setShowTextInput] = useState(enableTextInputEnv);
+  const [showArgumentBreakdown, setShowArgumentBreakdown] = useStoredBoolean(ARGUMENT_STORAGE_KEY, false);
+  const [showTextInput, setShowTextInput] = useStoredBoolean(TEXT_INPUT_STORAGE_KEY, enableTextInputEnv);
   const [includeTranscriptDiagnostics, setIncludeTranscriptDiagnostics] =
-    useState(transcriptDiagnosticsEnabled);
-  const [topics, setTopics] = useState<TopicListing[]>([]);
+    useStoredBoolean(TRANSCRIPT_DIAGNOSTICS_STORAGE_KEY, transcriptDiagnosticsEnabled);
+  const [topics] = useState(getTopicListings);
   const transcriptDiagnosticsIncluded =
     transcriptDiagnosticsEnabled && includeTranscriptDiagnostics;
   const formRef = useRef<HTMLFormElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
-  const factCheckQueueRef = useRef<QueuedClaim[]>([]);
-  const claimByIdRef = useRef<Map<string, ClaimRecord>>(new Map());
-  const claimIndexRef = useRef<Map<string, string>>(new Map());
-  const latestClaimIdRef = useRef<string | null>(null);
-  const isProcessingRef = useRef(false);
-  const transcriptHistoryRef = useRef<TranscriptChunk[]>([]);
-  const pendingTextRef = useRef<string>("");
-  const extractTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pendingIntentRef = useRef<ExtractIntent>({
-    hasDispute: false,
-    hasExplicitVerify: false,
-  });
-  const diagnosticSessionIdRef = useRef(createDiagnosticSessionId());
+  const [diagnosticSessionId] = useState(createDiagnosticSessionId);
   const diagnosticSessionStartedAtRef = useRef(new Date().toISOString());
+  const pipeline = useClaimPipeline({
+    diagnosticSessionId,
+    includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
+  });
+  const { factChecks, handleTranscript: processTranscript, submitClaim, flush, diagnostics } = pipeline;
 
   const resizeTextArea = useCallback(() => {
     const el = textAreaRef.current;
@@ -136,527 +85,23 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    // Load topic listings
-    setTopics(getTopicListings());
-  }, []);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(ARGUMENT_STORAGE_KEY);
-      if (stored !== null) {
-        setShowArgumentBreakdown(stored === "true");
-      }
-    } catch (error) {
-      console.warn("Failed to read argument preference.", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        ARGUMENT_STORAGE_KEY,
-        showArgumentBreakdown ? "true" : "false"
-      );
-    } catch (error) {
-      console.warn("Failed to save argument preference.", error);
-    }
-  }, [showArgumentBreakdown]);
-
-  useEffect(() => {
-    if (!showTextInput) return;
-    resizeTextArea();
+    if (showTextInput) resizeTextArea();
   }, [showTextInput, textInput, resizeTextArea]);
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(TEXT_INPUT_STORAGE_KEY);
-      if (stored !== null) {
-        setShowTextInput(stored === "true");
-      }
-    } catch (error) {
-      console.warn("Failed to read text input preference.", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        TEXT_INPUT_STORAGE_KEY,
-        showTextInput ? "true" : "false"
-      );
-    } catch (error) {
-      console.warn("Failed to save text input preference.", error);
-    }
-  }, [showTextInput]);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(TRANSCRIPT_DIAGNOSTICS_STORAGE_KEY);
-      if (stored !== null) {
-        setIncludeTranscriptDiagnostics(stored === "true");
-      }
-    } catch (error) {
-      console.warn("Failed to read transcript diagnostics preference.", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        TRANSCRIPT_DIAGNOSTICS_STORAGE_KEY,
-        includeTranscriptDiagnostics ? "true" : "false"
-      );
-    } catch (error) {
-      console.warn("Failed to save transcript diagnostics preference.", error);
-    }
-  }, [includeTranscriptDiagnostics]);
-
-  const upsertFactCheckLoading = useCallback((id: string, claim: string) => {
-    setFactChecks((prev) => {
-      const existingIndex = prev.findIndex((fc) => fc.id === id);
-      const entry: FactCheck = {
-        id,
-        claim,
-        result: null,
-        isLoading: true,
-        timestamp: new Date(),
-      };
-
-      if (existingIndex === -1) {
-        return [entry, ...prev];
-      }
-
-      const existing = prev[existingIndex];
-      const updated: FactCheck = {
-        ...existing,
-        claim,
-        result: null,
-        isLoading: true,
-        error: undefined,
-        timestamp: entry.timestamp,
-      };
-
-      const next = [...prev];
-      next.splice(existingIndex, 1);
-      return [updated, ...next];
-    });
-  }, []);
-
-  const setFactCheckResult = useCallback((id: string, result: StructuredFactCheck) => {
-    setFactChecks((prev) =>
-      prev.map((fc) =>
-        fc.id === id ? { ...fc, result, isLoading: false, error: undefined } : fc
-      )
-    );
-  }, []);
-
-  const setFactCheckError = useCallback((id: string, message: string) => {
-    setFactChecks((prev) =>
-      prev.map((fc) =>
-        fc.id === id ? { ...fc, error: message, isLoading: false } : fc
-      )
-    );
-  }, []);
-
-  const enqueueClaim = useCallback((item: QueuedClaim) => {
-    const queue = factCheckQueueRef.current;
-    const existingIndex = queue.findIndex((queued) => queued.id === item.id);
-    if (existingIndex >= 0) {
-      queue.splice(existingIndex, 1);
-    }
-
-    if (item.urgent) {
-      queue.unshift(item);
-    } else {
-      queue.push(item);
-    }
-  }, []);
-
-  const findSimilarRecord = useCallback((claim: string) => {
-    let best: { record: ClaimRecord; score: number } | null = null;
-    for (const record of claimByIdRef.current.values()) {
-      const score = claimSimilarityScore(claim, record.claim);
-      if (score >= CLAIM_SIMILARITY_THRESHOLD && (!best || score > best.score)) {
-        best = { record, score };
-      }
-    }
-    return best;
-  }, []);
-
-  const queueClaimCheck = useCallback(
-    (claim: string, options: { context: string; urgent?: boolean; forceCheck?: boolean }) => {
-      const { context, urgent = false, forceCheck = false } = options;
-      const normalized = normalizeClaim(claim);
-      const now = Date.now();
-
-      const exactId = claimIndexRef.current.get(normalized);
-      let matchedRecord: ClaimRecord | undefined;
-      let matchScore = 0;
-
-      if (exactId) {
-        matchedRecord = claimByIdRef.current.get(exactId);
-        matchScore = 1;
-      }
-
-      if (!matchedRecord) {
-        const similar = findSimilarRecord(claim);
-        if (similar) {
-          matchedRecord = similar.record;
-          matchScore = similar.score;
-        }
-      }
-
-      if (matchedRecord) {
-        latestClaimIdRef.current = matchedRecord.id;
-
-        const isSameText = matchedRecord.claim.trim() === claim.trim();
-        const isRecentDone = matchedRecord.status === "done"
-          && matchedRecord.lastCheckedAt
-          && now - matchedRecord.lastCheckedAt < CLAIM_TTL_MS;
-
-        if (isRecentDone && !forceCheck && !urgent && matchScore >= CLAIM_DUPLICATE_THRESHOLD) {
-          addPipelineBreadcrumb("claim.skip_recent_duplicate", {
-            ...claimDiagnosticData(claim, transcriptDiagnosticsIncluded),
-            matchScore,
-            recordStatus: matchedRecord.status,
-          });
-          return;
-        }
-
-        if (matchedRecord.status !== "done" && isSameText && !forceCheck && !urgent) {
-          addPipelineBreadcrumb("claim.skip_existing_inflight", {
-            ...claimDiagnosticData(claim, transcriptDiagnosticsIncluded),
-            recordStatus: matchedRecord.status,
-          });
-          return;
-        }
-
-        if (!isSameText || forceCheck || urgent || matchedRecord.status === "done") {
-          matchedRecord.revision += 1;
-        }
-
-        matchedRecord.claim = claim;
-        matchedRecord.lastUpdatedAt = now;
-
-        if (normalized !== matchedRecord.normalized) {
-          claimIndexRef.current.delete(matchedRecord.normalized);
-          matchedRecord.normalized = normalized;
-          claimIndexRef.current.set(normalized, matchedRecord.id);
-        }
-
-        matchedRecord.status = "queued";
-        addPipelineBreadcrumb("claim.requeued", {
-          ...claimDiagnosticData(claim, transcriptDiagnosticsIncluded),
-          urgent,
-          forceCheck,
-          matchScore,
-          revision: matchedRecord.revision,
-        });
-        upsertFactCheckLoading(matchedRecord.id, claim);
-        enqueueClaim({
-          id: matchedRecord.id,
-          claim,
-          context,
-          revision: matchedRecord.revision,
-          urgent,
-        });
-        return;
-      }
-
-      const id = crypto.randomUUID();
-      const record: ClaimRecord = {
-        id,
-        claim,
-        normalized,
-        revision: 1,
-        status: "queued",
-        lastUpdatedAt: now,
-      };
-
-      claimByIdRef.current.set(id, record);
-      claimIndexRef.current.set(normalized, id);
-      latestClaimIdRef.current = id;
-      addPipelineBreadcrumb("claim.queued", {
-        ...claimDiagnosticData(claim, transcriptDiagnosticsIncluded),
-        urgent,
-        forceCheck,
-      });
-      upsertFactCheckLoading(id, claim);
-      enqueueClaim({ id, claim, context, revision: 1, urgent });
-    },
-    [enqueueClaim, findSimilarRecord, transcriptDiagnosticsIncluded, upsertFactCheckLoading]
-  );
-
-  const processFactCheck = useCallback(async (item: QueuedClaim) => {
-    const record = claimByIdRef.current.get(item.id);
-    if (!record || record.revision !== item.revision) {
-      return;
-    }
-
-    record.status = "checking";
-    record.inFlightRevision = item.revision;
-    addPipelineBreadcrumb("fact_check.start", {
-      ...claimDiagnosticData(item.claim, transcriptDiagnosticsIncluded),
-      revision: item.revision,
-      contextLen: item.context.length,
-    });
-
-    try {
-      const response = await fetch("/api/fact-check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          claim: item.claim,
-          context: item.context,
-          includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
-          diagnosticSessionId: diagnosticSessionIdRef.current,
-        }),
-      });
-
-      if (!response.ok) {
-        addPipelineBreadcrumb("fact_check.http_error", {
-          status: response.status,
-        }, "error");
-        throw new Error("Fact-check failed");
-      }
-
-      const result: StructuredFactCheck = await response.json();
-      const current = claimByIdRef.current.get(item.id);
-      if (!current || current.revision !== item.revision) {
-        return;
-      }
-
-      current.status = "done";
-      current.lastCheckedAt = Date.now();
-      current.inFlightRevision = undefined;
-      addPipelineBreadcrumb("fact_check.done", {
-        verdict: result.verdict,
-        confidence: result.confidence,
-        whatsTrueCount: result.whatsTrue.length,
-        whatsWrongCount: result.whatsWrong.length,
-        contextCount: result.context.length,
-        sourceCount: result.sources.length,
-      });
-      addPipelineLog("client.fact_check.completed", {
-        diagnosticSessionId: diagnosticSessionIdRef.current,
-        claimId: item.id,
-        revision: item.revision,
-        verdict: result.verdict,
-        confidence: result.confidence,
-        sourceCount: result.sources.length,
-        claimLen: item.claim.length,
-        claim: transcriptDiagnosticsIncluded
-          ? limitDiagnosticText(item.claim, 1000)
-          : undefined,
-      });
-      setFactCheckResult(item.id, result);
-    } catch (error) {
-      console.error("Fact-check error:", error);
-      capturePipelineError(error, {
-        stage: "client-fact-check",
-        revision: item.revision,
-        ...claimDiagnosticData(item.claim, transcriptDiagnosticsIncluded),
-      });
-      const current = claimByIdRef.current.get(item.id);
-      if (!current || current.revision !== item.revision) {
-        return;
-      }
-
-      current.status = "done";
-      current.inFlightRevision = undefined;
-      setFactCheckError(item.id, "Failed to fact-check this claim.");
-    }
-  }, [setFactCheckError, setFactCheckResult, transcriptDiagnosticsIncluded]);
-
-  const processQueue = useCallback(async () => {
-    if (isProcessingRef.current || factCheckQueueRef.current.length === 0) return;
-
-    isProcessingRef.current = true;
-    const next = factCheckQueueRef.current.shift();
-    if (next) {
-      await processFactCheck(next);
-    }
-    isProcessingRef.current = false;
-
-    if (factCheckQueueRef.current.length > 0) {
-      processQueue();
-    }
-  }, [processFactCheck]);
-
-  const getRecentContext = useCallback(() => {
-    const now = Date.now();
-    const recentChunks = transcriptHistoryRef.current.filter(
-      chunk => now - chunk.timestamp < CONTEXT_WINDOW_MS
-    );
-    return recentChunks.map(c => c.text).join(" ");
-  }, []);
-
-  const getCheckedClaims = useCallback(() => {
-    const now = Date.now();
-    const checked = new Set<string>();
-
-    claimByIdRef.current.forEach((record) => {
-      if (record.status === "checking" || record.status === "queued") {
-        checked.add(record.claim);
-        return;
-      }
-      if (record.status === "done" && record.lastCheckedAt && now - record.lastCheckedAt < CLAIM_TTL_MS) {
-        checked.add(record.claim);
-      }
-    });
-
-    return [...checked];
-  }, []);
-
-  const doExtractClaims = useCallback(async (textToProcess: string, intent: ExtractIntent) => {
-    const trimmed = textToProcess.trim();
-    if (trimmed.length < MIN_EXTRACT_TEXT_CHARS && !intent.hasDispute && !intent.hasExplicitVerify) {
-      addPipelineBreadcrumb(
-        "extract.skip_short_text",
-        transcriptDiagnosticData(trimmed, transcriptDiagnosticsIncluded)
-      );
-      return;
-    }
-
-    try {
-      addPipelineBreadcrumb("extract.start", {
-        ...transcriptDiagnosticData(textToProcess, transcriptDiagnosticsIncluded),
-        hasDispute: intent.hasDispute,
-        hasExplicitVerify: intent.hasExplicitVerify,
-        checkedClaimCount: getCheckedClaims().length,
-      });
-      const response = await fetch("/api/extract-claims", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          newText: textToProcess,
-          recentContext: getRecentContext(),
-          checkedClaims: getCheckedClaims(),
-          includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
-          diagnosticSessionId: diagnosticSessionIdRef.current,
-        }),
-      });
-
-      if (!response.ok) {
-        addPipelineBreadcrumb("extract.http_error", {
-          status: response.status,
-        }, "error");
-        return;
-      }
-
-      const { claims, forcedClaims } = await response.json();
-      const forcedSet = new Set<string>(forcedClaims || []);
-      const context = getRecentContext();
-      let queued = false;
-      addPipelineBreadcrumb("extract.done", {
-        claimCount: claims?.length || 0,
-        forcedClaimCount: forcedClaims?.length || 0,
-      });
-      addPipelineLog("client.claim_extraction.completed", {
-        diagnosticSessionId: diagnosticSessionIdRef.current,
-        transcriptLen: textToProcess.trim().length,
-        checkedClaimCount: getCheckedClaims().length,
-        claimCount: claims?.length || 0,
-        forcedClaimCount: forcedClaims?.length || 0,
-        claims: transcriptDiagnosticsIncluded && claims?.length
-          ? limitDiagnosticText(claims.join(" | "), 2000)
-          : undefined,
-        transcript: transcriptDiagnosticsIncluded
-          ? limitDiagnosticText(textToProcess, 2000)
-          : undefined,
-      });
-
-      if (claims && claims.length > 0) {
-        claims.forEach((claim: string) => {
-          const forceCheck = intent.hasExplicitVerify || forcedSet.has(claim);
-          const urgent = intent.hasDispute || forceCheck;
-          queueClaimCheck(claim, { context, urgent, forceCheck });
-          queued = true;
-        });
-      }
-
-      if (!queued && (intent.hasDispute || intent.hasExplicitVerify)) {
-        const latestId = latestClaimIdRef.current;
-        const latestRecord = latestId ? claimByIdRef.current.get(latestId) : undefined;
-        if (latestRecord) {
-          queueClaimCheck(latestRecord.claim, { context, urgent: true, forceCheck: true });
-          queued = true;
-        }
-      }
-
-      if (queued) {
-        processQueue();
-      }
-    } catch (error) {
-      console.error("Claim extraction error:", error);
-      capturePipelineError(error, {
-        stage: "client-extract",
-        ...transcriptDiagnosticData(textToProcess, transcriptDiagnosticsIncluded),
-      });
-    }
-  }, [
-    getRecentContext,
-    getCheckedClaims,
-    processQueue,
-    queueClaimCheck,
-    transcriptDiagnosticsIncluded,
-  ]);
-
-  const extractAndProcessClaims = useCallback((newText: string) => {
-    const hasDispute = isDisputeCue(newText);
-    const hasExplicitVerify = isExplicitVerifyCue(newText);
-
-    pendingTextRef.current = pendingTextRef.current
-      ? `${pendingTextRef.current} ${newText}`
-      : newText;
-
-    pendingIntentRef.current.hasDispute = pendingIntentRef.current.hasDispute || hasDispute;
-    pendingIntentRef.current.hasExplicitVerify =
-      pendingIntentRef.current.hasExplicitVerify || hasExplicitVerify;
-    addPipelineBreadcrumb("extract.schedule", {
-      ...transcriptDiagnosticData(newText, transcriptDiagnosticsIncluded),
-      hasDispute,
-      hasExplicitVerify,
-    });
-
-    if (extractTimeoutRef.current) {
-      clearTimeout(extractTimeoutRef.current);
-    }
-
-    const delayMs = getExtractionDelayMs(newText, pendingIntentRef.current.hasExplicitVerify);
-    addPipelineBreadcrumb("extract.delay_selected", { delayMs });
-
-    extractTimeoutRef.current = setTimeout(() => {
-      const textToProcess = pendingTextRef.current;
-      const intent = pendingIntentRef.current;
-      pendingTextRef.current = "";
-      pendingIntentRef.current = { hasDispute: false, hasExplicitVerify: false };
-      doExtractClaims(textToProcess, intent);
-    }, delayMs);
-  }, [doExtractClaims, transcriptDiagnosticsIncluded]);
-
-  const handleTranscript = useCallback((text: string) => {
-    const now = Date.now();
-
-    transcriptHistoryRef.current.push({ text, timestamp: now });
-
-    transcriptHistoryRef.current = transcriptHistoryRef.current.filter(
-      chunk => now - chunk.timestamp < CONTEXT_WINDOW_MS
-    );
-
-    setTranscript((prev) => (prev ? `${prev} ${text}` : text));
-
-    extractAndProcessClaims(text);
-  }, [extractAndProcessClaims]);
+  const handleTranscript = useCallback((text: string, metadata?: TranscriptSegmentMetadata) => {
+    setTranscript(prev => `${prev} ${text}`.trim().slice(-12000));
+    processTranscript(text, metadata);
+  }, [processTranscript]);
 
   const listener = useContinuousListener(handleTranscript, {
     includeTranscriptDiagnostics: transcriptDiagnosticsIncluded,
   });
 
   const buildSessionDiagnostics = useCallback((): Record<string, unknown> => {
-    const chunks = transcriptHistoryRef.current.slice(-80);
+    const pipelineSnapshot = diagnostics();
+    const chunks = pipelineSnapshot.history;
     const transcriptText = chunks.map((chunk) => chunk.text).join(" ");
-    const pendingText = pendingTextRef.current.trim();
+    const pendingText = pipelineSnapshot.pending?.pendingText.trim() ?? "";
     const browserContext =
       typeof window === "undefined"
         ? {}
@@ -672,7 +117,7 @@ export default function Home() {
 
     return {
       app: "fact-checker",
-      sessionId: diagnosticSessionIdRef.current,
+      sessionId: diagnosticSessionId,
       sessionStartedAt: diagnosticSessionStartedAtRef.current,
       sentAt: new Date().toISOString(),
       browser: browserContext,
@@ -712,8 +157,8 @@ export default function Home() {
         text: transcriptDiagnosticsIncluded
           ? limitDiagnosticText(pendingText, 4000)
           : undefined,
-        hasDispute: pendingIntentRef.current.hasDispute,
-        hasExplicitVerify: pendingIntentRef.current.hasExplicitVerify,
+        activeBatchId: pipelineSnapshot.pending?.activeBatchId,
+        failedBatchId: pipelineSnapshot.pending?.failedBatchId,
       },
       claims: factChecks.map((factCheck) => ({
         id: factCheck.id,
@@ -737,13 +182,11 @@ export default function Home() {
             }
           : null,
       })),
-      queue: {
-        queuedCount: factCheckQueueRef.current.length,
-        isProcessing: isProcessingRef.current,
-        knownClaimCount: claimByIdRef.current.size,
-      },
+      queue: pipelineSnapshot.queue,
     };
   }, [
+    diagnostics,
+    diagnosticSessionId,
     factChecks,
     listener.connectionStatus,
     listener.error,
@@ -797,36 +240,13 @@ export default function Home() {
       "text_claim.submitted",
       claimDiagnosticData(claim, transcriptDiagnosticsIncluded)
     );
-    queueClaimCheck(claim, {
-      context: getRecentContext(),
-      urgent: true,
-      forceCheck: true,
-    });
-    processQueue();
+    submitClaim(claim);
     setTextInput("");
-  }, [
-    getRecentContext,
-    processQueue,
-    queueClaimCheck,
-    textInput,
-    transcriptDiagnosticsIncluded,
-  ]);
+  }, [submitClaim, textInput, transcriptDiagnosticsIncluded]);
 
   useEffect(() => {
-    if (listener.isListening) return;
-    if (!pendingTextRef.current.trim()) return;
-
-    if (extractTimeoutRef.current) {
-      clearTimeout(extractTimeoutRef.current);
-      extractTimeoutRef.current = null;
-    }
-
-    const textToProcess = pendingTextRef.current;
-    const intent = pendingIntentRef.current;
-    pendingTextRef.current = "";
-    pendingIntentRef.current = { hasDispute: false, hasExplicitVerify: false };
-    doExtractClaims(textToProcess, intent);
-  }, [listener.isListening, doExtractClaims]);
+    if (!listener.isListening) flush();
+  }, [listener.isListening, flush]);
 
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1141,6 +561,7 @@ export default function Home() {
                 >
                   <FactCheckCard
                     factCheck={fc}
+                    onRetry={() => pipeline.retryClaim(fc.id)}
                     showArgumentBreakdown={showArgumentBreakdown}
                     showSourceChips
                   />
@@ -1192,6 +613,21 @@ export default function Home() {
                     </span>
                   )}
                 </p>
+              </div>
+            </div>
+          )}
+
+          {pipeline.extractionState.status !== "idle" && (
+            <div className="px-6 py-2 border-b border-border" role="status" aria-live="polite">
+              <div className="max-w-2xl mx-auto flex items-center justify-between gap-3 text-xs text-text-secondary">
+                <span>{pipeline.extractionState.status === "failed"
+                  ? pipeline.extractionState.error
+                  : pipeline.extractionState.status === "retrying"
+                    ? "Reconnecting to claim detection…"
+                    : "Recognizing claims…"}</span>
+                {pipeline.extractionState.status === "failed" && (
+                  <button className="shrink-0 underline" onClick={pipeline.retryExtraction}>Retry detection</button>
+                )}
               </div>
             </div>
           )}

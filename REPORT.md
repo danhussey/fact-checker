@@ -1,168 +1,124 @@
-# Real-Time Fact-Checker: Technical Report
+# Live claim recognition and evidence checking
 
-## What It Does
+## Runtime path
 
-A PWA that listens to live audio, transcribes speech, extracts factual claims, and fact-checks them in real-time using AI. Designed for evaluating claims during conversations, podcasts, or broadcasts.
+The browser sends ordered microphone chunks to Deepgram Nova 3. Only finalized
+transcript ranges enter claim detection; interim words remain a display preview.
+`no_delay=true` avoids entity-formatting waits, and 300 ms endpointing permits
+short pauses. Audio timestamps distinguish transport redelivery from genuinely
+repeated speech. Stop drains final recorder audio through `CloseStream`, bounded
+to 1.5 seconds, with guards against stale sessions and late callbacks.
 
-**Live**: https://fact-checker-theta.vercel.app
+`ExtractionScheduler` coalesces finalized fragments, sends one ordered extraction
+request at a time, and retains additional speech while busy. A completed sentence
+normally dispatches after 120 ms; trailing numbers and clauses have longer short
+windows. A 900 ms maximum batch age prevents indefinite debounce resets. Requests
+start at least 2.1 seconds apart, remaining below the middleware's 30/minute/IP
+budget. These are local scheduling bounds, not promises about provider latency.
 
----
+Each batch contains fresh text and a snapshot of up to 4,000 characters from the
+preceding 90 seconds. Fresh speech is not duplicated in history. An unfinished
+suffix explicitly returned by extraction is retained and prepended when more
+speech arrives, allowing “25 … million dollars” to survive across requests. Only
+an actual suffix of the submitted text can be retained. Failed batches remain
+available for retry instead of disappearing.
 
-## Architecture
+Extraction defaults to Grok 4.3 with reasoning disabled, zero SDK retries, and a
+seven-second server deadline (eight-second browser deadline). Model output has
+up to eight candidates, classified as `new`, `repeat`, or `revision`, with an
+existing claim ID when applicable. Only fresh assertions are eligible; history
+resolves references and continuations. Short complete assertions are permitted;
+there is no numeric fallback that treats unfinished speech as a claim.
 
-```
-Browser Mic → MediaRecorder → Whisper API → Transcript
-                                              ↓
-                              Grok (claim extraction)
-                                              ↓
-                              Grok (fact-checking) → UI
-```
+## Claim identity and corrections
 
-### Stack
-- **Framework**: Next.js 16 (App Router)
-- **Transcription**: OpenAI Whisper (`whisper-1`)
-- **AI**: xAI Grok (`grok-3-fast`) via Vercel AI SDK
-- **Deployment**: Vercel
-- **PWA**: `@ducanh2912/next-pwa` with offline support
+`claimComparison.ts` is the shared source of deterministic equivalence and changed
+fact guards. Formatting, equivalent number words and unit spelling can share an
+identity. Decimal points, signs, scale, currency, negation, entity, property,
+subject/object roles, comparison direction and scope must survive comparison.
+Word overlap alone never establishes a duplicate.
 
----
+The extraction model identifies semantic paraphrases. Both API and client validate
+referenced IDs and veto repeat classifications when factual anchors differ. A
+related assertion about another property is new. Only an actual correction or
+replacement is a revision. Explicit requests can recheck completed claims; a
+request already running is reused.
 
-## Key Technical Decisions
+`ClaimQueue` keeps session-local identities, including recently mentioned completed
+claims. Simple repetition does not expire a successful check after an arbitrary
+five-minute timer. Changed facts are eligible immediately. A substantive revision
+increments its generation, aborts obsolete work, and takes priority. Two research
+workers prevent a slow claim monopolizing all verification. Stale generations
+cannot update the displayed result. Timestamp ordering uses the newest segment
+in a batch so a later spoken correction is not mistaken for an older manual claim.
 
-### Structured Outputs
-Used Vercel AI SDK's `generateObject()` with Zod schemas to get consistent JSON responses:
+The UI distinguishes queued, checking, retrying, completed and failed checks.
+Failures are excluded from checked-claim memory and have an explicit Retry button.
+429 responses impose a shared queue cooldown using `Retry-After`. Transient
+network/502/503 failures get one retry unless the server marks them nonretryable.
+A 45-second research timeout does not automatically launch another paid search;
+the user can retry the failed card. The client imposes its own 48-second deadline.
 
-```typescript
-const factCheckSchema = z.object({
-  verdict: z.enum(["true", "mostly true", "half true", "mostly false", "false", "unverified"]),
-  confidence: z.number().min(1).max(4),
-  whatsTrue: z.array(z.string()).max(2),
-  whatsWrong: z.array(z.string()).max(2),
-  sources: z.array(z.object({ name: z.string(), url: z.string().optional() })).max(3),
-});
-```
+## Evidence retrieval
 
-### Duplicate Detection
-Two-layer approach to prevent re-checking the same claim:
-1. **Prompt-level**: LLM instructed to skip claims similar to already-checked list
-2. **Post-filter**: 50% word overlap threshold with stop-word removal
+Live `/api/fact-check` explicitly uses xAI Responses `web_search`, rather than
+relying on model memory. Search receives only the resolved standalone claim and
+the current date, not the raw transcript. Each attempt permits one search tool
+call and asks for primary-source evidence, relevant contradictions and uncertainty.
 
-### Context Window
-5-minute rolling transcript buffer sent with each claim extraction request. Allows the AI to:
-- Resolve pronouns and references
-- Build complete claims from fragmented speech
-- Verify claims about "what was just said"
+Only provider citation metadata associated with a cited passage can become an
+evidence source. Those passages are search-provider summaries, not independently
+fetched page extracts. A second structured assessment sees those passages and
+selects source IDs. Factual bullets must reference valid selected IDs, and the
+server supplies source labels and URLs from the retrieved source records. Free-text
+URLs and invented source IDs cannot become displayed citations. Insufficient
+evidence returns `unverified`; infrastructure timeouts and provider errors return
+failure statuses instead of a successfully checked verdict.
 
-### Whisper Hallucination Filtering
-Whisper hallucinates on silence/ambient noise. Filtered via:
-- Minimum file size threshold (8KB)
-- Pattern matching for known hallucinations ("subscribe", "thank you for watching", emoji spam)
-- Non-ASCII ratio checks
+Retrieval and assessment share a 45-second deadline and propagate client
+cancellation. There are no server retries multiplying the browser's retry policy.
+`XAI_FACT_CHECK_MODEL` and `XAI_EXTRACTION_MODEL` optionally override the default
+`grok-4.3`. Research uses the existing `XAI_API_KEY`. According to xAI's pricing at
+implementation, web search costs $0.005 per tool invocation plus model token
+charges; consult current pricing before changing budgets or concurrency.
 
----
+The separate `/api/research/topic` is an admin topic-generation workflow. It is
+not the live microphone pipeline and is not invoked for individual live claims.
 
-## Abuse Prevention
+## Observability and regression coverage
 
-### Rate Limiting (Middleware)
-```typescript
-const RATE_LIMITS = {
-  "/api/transcribe": 10,      // req/min - most expensive
-  "/api/extract-claims": 30,
-  "/api/fact-check": 30,
-};
-```
-IP-based, in-memory sliding window. Returns 429 with `Retry-After` header.
+Measure separately:
 
-### Request Logging
-Structured logs for Vercel dashboard (IPs are SHA-256 hashed for privacy):
-```
-[api:fact-check] { ip: "a1b2c3d4e5f6", claimLen, hasContext }
-[api:transcribe] { ip: "a1b2c3d4e5f6", size, textLen }
-[rate-limit] { ip: "a1b2c3d4e5f6", endpoint, retryAfter }
-```
+1. Audio word end → finalized transcript receipt.
+2. Transcript receipt → extraction start and completion.
+3. Audio word end → claim queued/displayed.
+4. Queue wait and audio word end → actual research start.
+5. Retrieval, assessment and total research duration.
 
-### Sentry Diagnostics
-Sentry captures client, server, and edge errors, masked browser replay, and structured
-pipeline logs for claim extraction and fact-check review. The app also has a manual Feedback
-button that sends a Sentry feedback event with a JSON diagnostics attachment and asks Sentry
-to include the replay buffer.
+Logs use `diagnosticSessionId`, extraction request/batch ID and sequence, and claim
+ID/revision. Transcript text remains governed by the existing diagnostics toggle.
+No raw audio is logged or stored. Application state lives in the current page.
 
-Transcript diagnostics are available unless `NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS=false`
-is set, and each browser session can turn them off from Settings. When enabled, Sentry
-breadcrumbs, structured logs, and feedback attachments can include recent transcript text and
-extracted claims so claim-detection failures can be debugged. Raw audio is not attached, and
-the app does not send a user account, name, or email with feedback.
+`npm test` runs deterministic tests without a browser or billable API calls. These
+cover factual identity, semantic-repeat guards, production API payloads, deadline
+and cancellation behavior, stale revisions, concurrent workers, retry recovery,
+request budgets, unfinished-fragment retention, cited evidence and recording drain.
+Browser tests exercise the actual React page with mocked microphone, WebSocket and
+provider endpoints. The pipeline unit suite runs in CI alongside type checking,
+linting and the production build.
 
-For routine extraction-quality review, use Sentry Logs with `area:fact-checker.pipeline`.
-Key messages are `api.claim_extraction.completed`, `client.claim_extraction.completed`, and
-`api.fact_check.completed`. The `diagnosticSessionId` attribute links API logs, client logs,
-and any manual feedback attachment from the same browser session.
+An authorized one-claim provider smoke measured 982 ms for extraction and 18.868
+seconds for grounded research (12.801 seconds retrieval, 6.065 seconds assessment).
+It used one web search and returned NASA/ESA citations, costing $0.02236365 total
+including extraction. These are individual provider-call measurements, not a
+microphone-to-verdict benchmark or a guaranteed latency. Browser scheduling tests
+use controlled provider responses, plus a separate native-timer regression.
 
-### IP Anonymization
-All IP addresses are hashed before logging or rate-limit tracking:
-```typescript
-function hashIP(ip: string): string {
-  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
-}
-```
-Raw IPs are never stored.
+## Provider references
 
----
-
-## API Routes
-
-| Endpoint | Purpose | Model |
-|----------|---------|-------|
-| `/api/transcribe` | Audio → text | OpenAI Whisper |
-| `/api/extract-claims` | Text → fact-checkable claims | Grok 3 Fast |
-| `/api/fact-check` | Claim → verdict + evidence | Grok 3 Fast |
-
----
-
-## What Didn't Work
-
-- **Grok 4.1 Fast**: Schema validation errors and 3+ minute response times. Reverted to Grok 3 Fast.
-- **Perplexity**: Initially tested for fact-checking but switched to Grok for more direct verdicts.
-- **Citation URLs**: AI models tend to hallucinate URLs. Source names are more reliable.
-
----
-
-## Files Structure
-
-```
-src/
-├── app/
-│   ├── api/
-│   │   ├── transcribe/route.ts    # Whisper integration
-│   │   ├── extract-claims/route.ts # Claim extraction
-│   │   └── fact-check/route.ts    # Fact-checking
-│   ├── privacy/page.tsx           # Privacy policy
-│   └── page.tsx                   # Main UI
-├── hooks/
-│   └── useContinuousListener.ts   # Audio capture + VAD
-├── components/
-│   ├── FactCheckCard.tsx          # Result display
-│   └── VerdictBadge.tsx           # TRUE/FALSE badges
-└── middleware.ts                  # Rate limiting
-```
-
----
-
-## Environment Variables
-
-```
-OPENAI_API_KEY=   # Whisper transcription
-DEEPGRAM_API_KEY= # Server-side key with Deepgram /v1/auth/grant permission
-XAI_API_KEY=      # Grok (claims + fact-check)
-NEXT_PUBLIC_SENTRY_DSN=
-SENTRY_DSN=
-NEXT_PUBLIC_ENABLE_TRANSCRIPT_DIAGNOSTICS=true
-```
-
----
-
-## Future Considerations
-
-- Switch to Groq Whisper (`whisper-large-v3-turbo`) for faster/better transcription
-- Redis-backed rate limiting for multi-instance deployment
-- Vercel AI Gateway integration for usage dashboard
+- [Deepgram Smart Format and no_delay](https://developers.deepgram.com/docs/smart-format)
+- [Deepgram endpointing](https://developers.deepgram.com/docs/endpointing)
+- [xAI web search](https://docs.x.ai/developers/tools/web-search)
+- [xAI citations](https://docs.x.ai/developers/tools/citations)
+- [xAI model migration](https://docs.x.ai/developers/migration/may-15-retirement)
+- [xAI pricing](https://docs.x.ai/developers/pricing)

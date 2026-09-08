@@ -1,286 +1,266 @@
-const SMALL_NUMBER_WORDS = new Map([
-  ["zero", 0],
-  ["one", 1],
-  ["two", 2],
-  ["three", 3],
-  ["four", 4],
-  ["five", 5],
-  ["six", 6],
-  ["seven", 7],
-  ["eight", 8],
-  ["nine", 9],
-  ["ten", 10],
-  ["eleven", 11],
-  ["twelve", 12],
-  ["thirteen", 13],
-  ["fourteen", 14],
-  ["fifteen", 15],
-  ["sixteen", 16],
-  ["seventeen", 17],
-  ["eighteen", 18],
-  ["nineteen", 19],
+/** Conservative, shared claim comparison. Similar topics are not duplicates. */
+const SMALL_NUMBERS = new Map([
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+  "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+  "seventeen", "eighteen", "nineteen",
+].map((word, value) => [word, value]));
+const TENS = new Map([
+  ["twenty", 20], ["thirty", 30], ["forty", 40], ["fifty", 50],
+  ["sixty", 60], ["seventy", 70], ["eighty", 80], ["ninety", 90],
 ]);
-
-const TENS_NUMBER_WORDS = new Map([
-  ["twenty", 20],
-  ["thirty", 30],
-  ["forty", 40],
-  ["fifty", 50],
-  ["sixty", 60],
-  ["seventy", 70],
-  ["eighty", 80],
-  ["ninety", 90],
+const SCALES = new Map([
+  ["hundred", 100], ["thousand", 1e3], ["million", 1e6],
+  ["billion", 1e9], ["trillion", 1e12],
 ]);
-
-const UNIT_ALIASES = new Map([
-  ["millimeter", "millimeter"],
-  ["millimeters", "millimeter"],
-  ["millimetre", "millimeter"],
-  ["millimetres", "millimeter"],
-  ["centimeter", "centimeter"],
-  ["centimeters", "centimeter"],
-  ["centimetre", "centimeter"],
-  ["centimetres", "centimeter"],
-  ["meter", "meter"],
-  ["meters", "meter"],
-  ["metre", "meter"],
-  ["metres", "meter"],
-  ["m", "meter"],
-  ["kilometer", "kilometer"],
-  ["kilometers", "kilometer"],
-  ["kilometre", "kilometer"],
-  ["kilometres", "kilometer"],
-  ["km", "kilometer"],
-  ["foot", "foot"],
-  ["feet", "foot"],
-  ["ft", "foot"],
-  ["inch", "inch"],
-  ["inches", "inch"],
-  ["mile", "mile"],
-  ["miles", "mile"],
-  ["second", "second"],
-  ["seconds", "second"],
-  ["sec", "second"],
-  ["minute", "minute"],
-  ["minutes", "minute"],
-  ["min", "minute"],
-  ["mins", "minute"],
-  ["hour", "hour"],
-  ["hours", "hour"],
-  ["day", "day"],
-  ["days", "day"],
-  ["percent", "percent"],
-  ["percentage", "percent"],
-  ["dollar", "currency"],
-  ["dollars", "currency"],
-  ["usd", "currency"],
-  ["currency", "currency"],
-]);
-
-const LEADING_PROPER_NOUN_STOP_WORDS = new Set(["the", "a", "an"]);
-const PROPER_NOUN_STOP_PHRASES = new Set([
-  "he",
-  "she",
-  "it",
-  "they",
-  "this",
-  "that",
-  "these",
-  "those",
-  "we",
-  "you",
-  "i",
-]);
-
-function setsEqual(a: Set<string>, b: Set<string>): boolean {
-  if (a.size !== b.size) return false;
-  for (const value of a) {
-    if (!b.has(value)) return false;
-  }
-  return true;
+const UNIT_ALIASES = new Map<string, string>();
+for (const [unit, aliases] of Object.entries({
+  millimeter: ["millimeters", "millimetre", "millimetres", "mm"],
+  centimeter: ["centimeters", "centimetre", "centimetres", "cm"],
+  meter: ["meters", "metre", "metres", "m"],
+  kilometer: ["kilometers", "kilometre", "kilometres", "km"],
+  foot: ["feet", "ft"], inch: ["inches"], mile: ["miles"],
+  second: ["seconds", "sec"], minute: ["minutes", "min", "mins"],
+  hour: ["hours"], day: ["days"], year: ["years"],
+  percent: ["%"], dollar: ["dollars", "$"], pound: ["pounds", "£"],
+  euro: ["euros", "€"], gigabyte: ["gigabytes", "gb"],
+  megabyte: ["megabytes", "mb"], terabyte: ["terabytes", "tb"],
+  kilobyte: ["kilobytes", "kb"], kilogram: ["kilograms", "kg"],
+  gram: ["grams"], watt: ["watts"],
+})) {
+  for (const alias of [unit, ...aliases]) UNIT_ALIASES.set(alias, unit);
 }
 
-function tokenizeMeasurementText(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/(\d+(?:\.\d+)?)\s*%/g, "$1 percent")
-    .replace(/[$£€]\s*(\d+(?:\.\d+)?)/g, "$1 currency")
-    .replace(/[^a-z0-9.]+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+function tokensFor(text: string): string[] {
+  return text.normalize("NFKC").toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/\bwon't\b/g, "will not")
+    .replace(/\bcan't\b/g, "can not")
+    .replace(/\bcannot\b/g, "can not")
+    .replace(/n't\b/g, " not")
+    .replace(/\bper\s+cent\b/g, "percent")
+    // Grouping commas disappear, decimal points and signed values survive.
+    .replace(/(?<=\d),(?=\d{3}(?:\D|$))/g, "")
+    .match(/[+-]?(?:\d+(?:\.\d+)?|\.\d+)|[\p{L}]+(?:'[\p{L}]+)?|[%$£€]|[<>]=?|=/gu) || [];
+}
+
+function canonicalDigits(value: string): string {
+  const negative = value.startsWith("-");
+  const [integer, decimal = ""] = value.replace(/^[+-]/, "").split(".");
+  const whole = integer.replace(/^0+(?=\d)/, "") || "0";
+  const fraction = decimal.replace(/0+$/, "");
+  const magnitude = `${whole}${fraction ? `.${fraction}` : ""}`;
+  return negative && magnitude !== "0" ? `-${magnitude}` : magnitude;
 }
 
 function readNumberAt(tokens: string[], start: number): { value: string; next: number } | null {
-  const digitMatch = tokens[start]?.match(/^\d+(?:\.\d+)?$/);
-  if (digitMatch) {
-    return { value: digitMatch[0], next: start + 1 };
+  if (/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(tokens[start] || "")) {
+    let next = start + 1;
+    let shift = 0;
+    while (SCALES.has(tokens[next])) { shift += Math.log10(SCALES.get(tokens[next])!); next += 1; }
+    const initial = canonicalDigits(tokens[start]);
+    const sign = initial.startsWith("-") ? "-" : "";
+    const [whole, fraction = ""] = initial.replace(/^-/, "").split(".");
+    const digits = whole + fraction + "0".repeat(Math.max(0, shift - fraction.length));
+    const decimalAt = whole.length + shift;
+    return { value: canonicalDigits(`${sign}${digits.slice(0, decimalAt)}${digits.length > decimalAt ? `.${digits.slice(decimalAt)}` : ""}`), next };
   }
-
-  let total = 0;
-  let current = 0;
-  let found = false;
   let index = start;
-
+  let current = 0;
+  let total = 0;
+  let found = false;
+  let lastWasSmall = false;
+  let lastLargeScale = Infinity;
   while (index < tokens.length) {
     const token = tokens[index];
-    const small = SMALL_NUMBER_WORDS.get(token);
-    const tens = TENS_NUMBER_WORDS.get(token);
-
-    if (small !== undefined) {
-      current += small;
+    const digit = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(token) ? Number(token) : undefined;
+    const small = SMALL_NUMBERS.get(token);
+    const tens = TENS.get(token);
+    if (digit !== undefined || small !== undefined || tens !== undefined) {
+      // Do not merge separate values ("2024 2025", "five six").
+      if (found && (digit !== undefined || lastWasSmall)) break;
+      current += digit ?? small ?? tens!;
+      lastWasSmall = digit !== undefined || small !== undefined;
       found = true;
       index += 1;
       continue;
     }
-
-    if (tens !== undefined) {
-      current += tens;
-      found = true;
+    const scale = SCALES.get(token);
+    if (scale && found) {
+      if (scale === 100) current *= scale;
+      else { total += current * scale; current = 0; lastLargeScale = scale; }
+      lastWasSmall = false;
       index += 1;
       continue;
     }
-
-    if (token === "hundred" && found) {
-      current *= 100;
+    if (token === "point" && found && /^\d$/.test(String(SMALL_NUMBERS.get(tokens[index + 1])))) {
+      let fraction = "";
+      index += 1;
+      while (SMALL_NUMBERS.has(tokens[index]) && SMALL_NUMBERS.get(tokens[index])! < 10) {
+        fraction += SMALL_NUMBERS.get(tokens[index]);
+        index += 1;
+      }
+      current += Number(`0.${fraction}`);
+      continue;
+    }
+    // "one hundred and five", but never consume "five and six" as eleven.
+    if (token === "and" && found && !lastWasSmall &&
+      (SMALL_NUMBERS.has(tokens[index + 1]) || TENS.has(tokens[index + 1]))) {
+      const followingScale = tokens.slice(index + 1, index + 5).map((word) => SCALES.get(word)).find((scale) => scale && scale >= lastLargeScale);
+      if (followingScale) break;
       index += 1;
       continue;
     }
-
-    if (token === "thousand" && found) {
-      total += current * 1000;
-      current = 0;
-      index += 1;
-      continue;
-    }
-
-    if (token === "and" && found) {
-      index += 1;
-      continue;
-    }
-
     break;
   }
-
-  if (!found) return null;
-  return { value: String(total + current), next: index };
+  return found ? { value: String(total + current), next: index } : null;
 }
 
-function canonicalUnit(token: string): string | null {
-  return UNIT_ALIASES.get(token) || null;
-}
-
-function extractQuotedValues(text: string): Set<string> {
-  const quoted = new Set<string>();
-  const matches = text.matchAll(/["'“‘]([^"'”’]{2,})["'”’]/g);
-
-  for (const match of matches) {
-    quoted.add(match[1].toLowerCase().replace(/\s+/g, " ").trim());
+function canonicalTokens(text: string): string[] {
+  const tokens = tokensFor(text);
+  const result: string[] = [];
+  for (let index = 0; index < tokens.length;) {
+    const number = readNumberAt(tokens, index);
+    if (number) { result.push(number.value); index = number.next; }
+    else { result.push(UNIT_ALIASES.get(tokens[index]) || tokens[index]); index += 1; }
   }
-
-  return quoted;
-}
-
-function normalizeProperNounPhrase(phrase: string): string {
-  const tokens = phrase.toLowerCase().split(/\s+/).filter(Boolean);
-  while (tokens.length > 0 && LEADING_PROPER_NOUN_STOP_WORDS.has(tokens[0])) {
-    tokens.shift();
-  }
-  return tokens.join(" ");
-}
-
-function extractProperNounPhrases(text: string): Set<string> {
-  const phrases = new Set<string>();
-  const matches = text.matchAll(/\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*)*\b/g);
-
-  for (const match of matches) {
-    const normalized = normalizeProperNounPhrase(match[0]);
-    if (normalized.length > 1 && !PROPER_NOUN_STOP_PHRASES.has(normalized)) {
-      phrases.add(normalized);
+  // Currency placement is formatting; keep the actual currency identity.
+  for (let index = 0; index < result.length - 1; index += 1) {
+    if (["dollar", "pound", "euro"].includes(result[index]) && /^[+-]?\d/.test(result[index + 1])) {
+      [result[index], result[index + 1]] = [result[index + 1], result[index]];
     }
   }
+  return result;
+}
 
-  return phrases;
+export function normalizeClaimText(text: string): string {
+  return canonicalTokens(text).join(" ");
+}
+
+/** Only lossless formatting/number/unit changes are deterministic duplicates. */
+export function areClaimsEquivalent(a: string, b: string): boolean {
+  const normalized = normalizeClaimText(a);
+  return normalized.length > 0 && normalized === normalizeClaimText(b);
+}
+
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  return a.size === b.size && [...a].every((value) => b.has(value));
 }
 
 export function extractMeasurements(text: string): Set<string> {
-  const tokens = tokenizeMeasurementText(text);
+  const tokens = canonicalTokens(text);
   const measurements = new Set<string>();
-
-  for (let i = 0; i < tokens.length; i += 1) {
-    const number = readNumberAt(tokens, i);
-    if (!number) continue;
-
-    let unit = "number";
-    for (let j = number.next; j < Math.min(tokens.length, number.next + 4); j += 1) {
-      const candidate = canonicalUnit(tokens[j]);
-      if (candidate) {
-        unit = candidate;
-        break;
-      }
-    }
-
-    measurements.add(`${number.value}:${unit}`);
-    i = number.next - 1;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (!/^[+-]?\d+(?:\.\d+)?$/.test(tokens[index])) continue;
+    // A unit must immediately follow its quantity; do not borrow one from a later fact.
+    const unit = UNIT_ALIASES.get(tokens[index + 1]) || "number";
+    measurements.add(`${tokens[index]}:${unit}`);
   }
-
   return measurements;
 }
 
 export function extractQuantities(text: string): Set<string> {
-  const tokens = tokenizeMeasurementText(text);
-  const quantities = new Set<string>();
-
-  for (let i = 0; i < tokens.length; i += 1) {
-    const number = readNumberAt(tokens, i);
-    if (!number) continue;
-    quantities.add(number.value);
-    i = number.next - 1;
-  }
-
-  return quantities;
+  return new Set(canonicalTokens(text).filter((token) => /^[+-]?\d+(?:\.\d+)?$/.test(token)));
 }
 
-export function extractClaimFacts(text: string): {
-  measurements: Set<string>;
-  quantities: Set<string>;
-  quotedValues: Set<string>;
-  properNouns: Set<string>;
-} {
+function quotedValues(text: string): Set<string> {
+  return new Set([...text.matchAll(/"([^"\n]+)"|“([^”\n]+)”|(?<![\p{L}])'([^'\n]+)'(?![\p{L}])/gu)]
+    .map((match) => normalizeClaimText(match[1] || match[2] || match[3])));
+}
+
+function properNouns(text: string): Set<string> {
+  return new Set([...text.matchAll(/\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*)*\b/g)]
+    .map((match) => match[0].toLowerCase().replace(/^(?:the|a|an)\s+/, ""))
+    .filter((phrase) => !/^(?:the|a|an|he|she|it|they|this|that|we|you|i)$/.test(phrase)));
+}
+
+export function extractClaimFacts(text: string) {
   return {
-    measurements: extractMeasurements(text),
-    quantities: extractQuantities(text),
-    quotedValues: extractQuotedValues(text),
-    properNouns: extractProperNounPhrases(text),
+    measurements: extractMeasurements(text), quantities: extractQuantities(text),
+    quotedValues: quotedValues(text), properNouns: properNouns(text),
   };
 }
 
 export function measurementsDiffer(a: string, b: string): boolean {
-  const aMeasurements = extractMeasurements(a);
-  const bMeasurements = extractMeasurements(b);
-  if (aMeasurements.size === 0 || bMeasurements.size === 0) return false;
-  return !setsEqual(aMeasurements, bMeasurements);
+  return !setsEqual(extractMeasurements(a), extractMeasurements(b));
 }
 
+const NEGATIONS = new Set(["not", "no", "never", "none", "neither", "without"]);
+const SCOPES = new Set([
+  "all", "every", "each", "some", "most", "few", "only", "always", "sometimes",
+  "usually", "often", "rarely", "ever", "before", "after", "since", "until",
+  "currently", "formerly", "average", "median", "total", "capita", "annual", "monthly",
+  "daily", "weekly", "worldwide", "nationally", "locally", "approximately", "exactly",
+  "about", "nearly", "almost", "least", "over", "under", "more", "less", "than",
+  "can", "could", "may", "might", "will", "would", "must", "should", "was", "were",
+]);
+const DIRECTIONS = new Map([
+  ...["increase", "increases", "increased", "increasing", "rise", "rises", "rose", "higher", "greater", "bigger", "larger", "above", "exceeds"].map((word) => [word, "up"] as const),
+  ...["decrease", "decreases", "decreased", "decreasing", "drop", "drops", "dropped", "lower", "smaller", "below", "decline", "declines"].map((word) => [word, "down"] as const),
+]);
+const GRAMMAR_WORDS = new Set([
+  "the", "a", "an", "is", "are", "be", "been", "being", "have", "has", "had", "do",
+  "does", "did", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+  "and", "but", "or", "that", "which", "this", "these", "those", "it", "its",
+]);
+const PROPERTY_ALIASES = new Map([
+  ["jobs", "employment"], ["job", "employment"], ["employed", "employment"],
+  ["salaries", "wages"], ["salary", "wages"], ["wage", "wages"],
+  ["funds", "funding"], ["funded", "funding"], ["fund", "funding"],
+  ["receives", "receive"], ["received", "receive"], ["receiving", "receive"],
+  ["tall", "height"], ["weighs", "weight"], ["weigh", "weight"], ["weighed", "weight"],
+  ["wide", "width"], ["long", "length"], ["deep", "depth"],
+]);
+const MEASUREMENT_PROPERTIES = new Set(["height", "weight", "width", "length", "depth"]);
+
+/**
+ * Factual veto for model-labelled repeats, not a semantic equivalence test.
+ * Unknown paraphrases still require the extractor's explicit relationship; no
+ * word-overlap score is sufficient to suppress or revise a claim.
+ */
 export function claimFactsDiffer(a: string, b: string): boolean {
+  if (areClaimsEquivalent(a, b)) return false;
   const aFacts = extractClaimFacts(a);
   const bFacts = extractClaimFacts(b);
+  if (!setsEqual(aFacts.measurements, bFacts.measurements) ||
+      !setsEqual(aFacts.quantities, bFacts.quantities) ||
+      !setsEqual(aFacts.quotedValues, bFacts.quotedValues)) return true;
 
-  if (aFacts.measurements.size > 0 && bFacts.measurements.size > 0) {
-    if (!setsEqual(aFacts.measurements, bFacts.measurements)) return true;
-  }
+  const aTokens = canonicalTokens(a);
+  const bTokens = canonicalTokens(b);
+  const signature = (tokens: string[], set: Set<string>) => tokens.filter((token) => set.has(token)).join(" ");
+  if (signature(aTokens, NEGATIONS) !== signature(bTokens, NEGATIONS) ||
+      signature(aTokens, SCOPES) !== signature(bTokens, SCOPES)) return true;
+  const aDirections = aTokens.map((token) => DIRECTIONS.get(token)).filter(Boolean).join(" ");
+  const bDirections = bTokens.map((token) => DIRECTIONS.get(token)).filter(Boolean).join(" ");
+  if (aDirections && bDirections && aDirections !== bDirections) return true;
 
-  if (aFacts.quantities.size > 0 && bFacts.quantities.size > 0) {
-    if (!setsEqual(aFacts.quantities, bFacts.quantities)) return true;
-  }
+  // Ignore capitalization differences. A named entity absent from the other
+  // assertion is a factual change; names can move for active/passive phrasing.
+  const missingEntity = (names: Set<string>, tokens: string[]) => [...names].some((name) =>
+    name.split(" ").some((word) => !tokens.includes(word)));
+  if (aFacts.properNouns.size && bFacts.properNouns.size &&
+      (missingEntity(aFacts.properNouns, bTokens) || missingEntity(bFacts.properNouns, aTokens))) return true;
 
-  if (aFacts.quotedValues.size > 0 && bFacts.quotedValues.size > 0) {
-    if (!setsEqual(aFacts.quotedValues, bFacts.quotedValues)) return true;
-  }
-
-  if (aFacts.properNouns.size > 0 && bFacts.properNouns.size > 0) {
-    if (!setsEqual(aFacts.properNouns, bFacts.properNouns)) return true;
-  }
-
+  const content = (tokens: string[]) => tokens.filter((token) => !GRAMMAR_WORDS.has(token))
+    .map((token) => PROPERTY_ALIASES.get(token) || DIRECTIONS.get(token) || token);
+  const aContent = content(aTokens);
+  const bContent = content(bTokens);
+  const aSet = new Set(aContent);
+  const bSet = new Set(bContent);
+  // Swapping subject/object or attaching the same quantities to other entities
+  // is not a repeat. This intentionally errs toward checking ambiguous wording.
+  const roleOrder = (tokens: string[]) => tokens.filter((token) => !MEASUREMENT_PROPERTIES.has(token)).join(" ");
+  // Attribute placement changes in "25 meters tall" / "height of 25 meters"
+  // without swapping who/what the measurement describes.
+  if (setsEqual(aSet, bSet) && roleOrder(aContent) !== roleOrder(bContent)) return true;
+  const aOnly = [...aSet].filter((token) => !bSet.has(token));
+  const bOnly = [...bSet].filter((token) => !aSet.has(token));
+  const common = [...aSet].filter((token) => bSet.has(token)).length;
+  // A small changed property in otherwise identical wording (wages/jobs,
+  // harmful/beneficial, exports/imports, China/Japan) must not be swallowed.
+  if (common >= 1 && common / Math.max(aSet.size, bSet.size) >= 0.5 &&
+      ((aOnly.length === 1 && bOnly.length === 1) ||
+       (aOnly.length === 0 && bOnly.length > 0) ||
+       (bOnly.length === 0 && aOnly.length > 0))) return true;
   return false;
 }

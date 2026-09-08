@@ -54,6 +54,7 @@ export interface FactCheck {
   claim: string;
   result: StructuredFactCheck | null;
   isLoading: boolean;
+  status?: "queued" | "checking" | "retrying" | "done" | "failed";
   error?: string;
   timestamp: Date;
 }

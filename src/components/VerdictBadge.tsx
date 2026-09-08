@@ -28,10 +28,10 @@ export function VerdictBadge({ verdict, confidence }: VerdictBadgeProps) {
   );
 }
 
-export function VerdictBadgeLoading() {
+export function VerdictBadgeLoading({ label = "Checking..." }: { label?: string }) {
   return (
     <span className="inline-flex items-center px-3 py-1.5 rounded-full bg-border animate-pulse">
-      <span className="text-xs font-medium text-text-muted">Checking...</span>
+      <span className="text-xs font-medium text-text-muted">{label}</span>
     </span>
   );
 }

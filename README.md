@@ -14,7 +14,12 @@ Real-time fact-checking PWA. Listens to audio, extracts claims, and fact-checks 
 1. Click "Start Listening" to capture audio from your microphone
 2. Speech is transcribed in real time via Deepgram
 3. AI extracts fact-checkable claims from the transcript
-4. Each claim is verified and rated (true, false, mostly true, etc.)
+4. Each claim is checked against web evidence and rated (true, false, mostly true, etc.)
+
+Recognition and research are separate: claims appear as soon as extraction finishes,
+and up to two evidence checks run concurrently. Repeats reuse existing checks;
+explicit corrections replace and cancel outdated work. Failed checks have a Retry
+button and are never remembered as successful verifications.
 
 ## Stack
 
@@ -45,6 +50,8 @@ npm run dev
 |----------|-------------|
 | `DEEPGRAM_API_KEY` | Server-side Deepgram API key used to mint short-lived browser transcription tokens. Must have permission to call Deepgram `/v1/auth/grant`. |
 | `XAI_API_KEY` | xAI API key for Grok |
+| `XAI_EXTRACTION_MODEL` | Optional extraction model override; defaults to `grok-4.3`, with reasoning disabled for fast extraction. |
+| `XAI_FACT_CHECK_MODEL` | Optional live evidence-research model override; defaults to `grok-4.3` and must support Responses `web_search` and structured output. |
 | `OPENAI_API_KEY` | OpenAI API key for legacy transcription fallback |
 | `NEXT_PUBLIC_SENTRY_DSN` | Public Sentry DSN for browser errors, replay, and feedback |
 | `SENTRY_DSN` | Server-side Sentry DSN, usually the same project DSN |
@@ -61,10 +68,30 @@ Transcript diagnostics are anonymous in the sense that the app does not attach a
 
 For claim-extraction review, search Sentry Logs for `area:fact-checker.pipeline` and messages such as `api.claim_extraction.completed`, `client.claim_extraction.completed`, and `api.fact_check.completed`. The shared `diagnosticSessionId` connects logs from the same browser session to any feedback attachment.
 
+Stage logs include extraction batch IDs, claim/revision IDs, recognition delay,
+queue wait, actual research start, retrieval time, assessment time, and completion.
+Compare those stages separately when tuning latency; a slow verdict is different
+from delayed claim recognition.
+
+## Validation
+
+```bash
+npm test              # Deterministic pipeline/API regression tests; no paid calls or browser
+npm run lint
+npx tsc --noEmit
+npm run test:browser  # UI and mocked microphone/Deepgram flows; install Playwright Chromium first
+npm run build
+```
+
+Live API tests are opt-in through provider environment variables. The pipeline
+regression tests mock providers and never require credentials.
+
 ## Architecture
 
 ```
-Browser Mic → Deepgram → Transcript → Grok (extract) → Grok (verify) → UI
+Browser Mic → Deepgram finals → Batched extraction → Claim card
+                                                    ↓
+                           xAI web search → Cited assessment → Verdict
 ```
 
 See [REPORT.md](REPORT.md) for detailed technical documentation.

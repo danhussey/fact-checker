@@ -1,378 +1,99 @@
-import { xai } from "@ai-sdk/xai";
+import { createXai } from "@ai-sdk/xai";
 import { generateObject } from "ai";
-import { z } from "zod";
 import { debug } from "@/lib/debug";
-import { claimFactsDiffer } from "@/lib/claimComparison";
-import { directFactClaimFallback } from "@/lib/directClaimFallback";
+import {
+  buildExtractionPrompt,
+  createExtractionHandler,
+  extractionSchema,
+  EXTRACTION_SYSTEM_PROMPT,
+} from "@/lib/claimExtraction";
 import {
   addPipelineBreadcrumb,
   addPipelineLog,
   capturePipelineError,
-  claimDiagnosticData,
   limitDiagnosticText,
   textStats,
   transcriptDiagnosticData,
   transcriptDiagnosticsEnabled,
 } from "@/lib/observability";
-import crypto from "crypto";
 
-// Stop words to ignore in similarity comparison
-const STOP_WORDS = new Set([
-  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did", "will", "would", "could",
-  "should", "may", "might", "must", "shall", "can", "need", "dare",
-  "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
-  "into", "through", "during", "before", "after", "above", "below",
-  "between", "under", "again", "further", "then", "once", "here",
-  "there", "when", "where", "why", "how", "all", "each", "few", "more",
-  "most", "other", "some", "such", "no", "nor", "not", "only", "own",
-  "same", "so", "than", "too", "very", "just", "and", "but", "if", "or",
-  "because", "until", "while", "although", "though", "after",
-  "that", "which", "who", "whom", "this", "these", "those", "what",
-  "speaker", "claims", "states", "says", "said", "according", "suggests",
-  "mentioned", "refers", "described", "noted", "indicates", "asserts"
-]);
-
-function normalizeForComparison(text: string): string {
-  return text.toLowerCase()
-    .replace(/[^\w\s]/g, " ")  // Remove punctuation
-    .replace(/\s+/g, " ")       // Normalize whitespace
-    .trim();
-}
-
-function extractContentWords(text: string): Set<string> {
-  return new Set(
-    text.split(/\s+/)
-      .filter(w => w.length > 2 && !STOP_WORDS.has(w))
-  );
-}
-
-const META_APP_PATTERN = /\b(this|the|your|our)\s+(app|tool|system)\b/i;
-const META_PROCESS_PATTERN = /\b(fact[- ]?check(ing)?|check(ing)?|listening|microphone|mic|transcript|transcrib|render|slow|lag|bug|issue|working|processing|speaking|speech|voice)\b/i;
-
-const POSITIVE_COMPARATIVE_WORDS = new Set([
-  "more", "greater", "bigger", "larger", "higher", "heavier", "taller",
-  "longer", "faster", "stronger", "increase", "increases", "increased",
-  "rise", "rises", "rose", "above", "over", "exceed", "exceeds", "exceeded",
-]);
-
-const NEGATIVE_COMPARATIVE_WORDS = new Set([
-  "less", "smaller", "lower", "lighter", "shorter", "slower", "weaker",
-  "decrease", "decreases", "decreased", "drop", "drops", "dropped",
-  "decline", "declines", "declined", "below", "under",
-]);
-
-const NEGATION_WORDS = new Set(["not", "no", "never", "none", "without"]);
-
-function hasNegation(text: string): boolean {
-  return text.split(/\s+/).some((token) => NEGATION_WORDS.has(token));
-}
-
-function comparativePolarity(text: string): number {
-  let score = 0;
-  const tokens = text.split(/\s+/);
-  for (const token of tokens) {
-    if (POSITIVE_COMPARATIVE_WORDS.has(token)) score += 1;
-    if (NEGATIVE_COMPARATIVE_WORDS.has(token)) score -= 1;
-  }
-  if (hasNegation(text)) {
-    score *= -1;
-  }
-  if (score > 0) return 1;
-  if (score < 0) return -1;
-  return 0;
-}
-
-function isLikelyContradiction(a: string, b: string): boolean {
-  const aWords = extractContentWords(a);
-  const bWords = extractContentWords(b);
-  if (aWords.size === 0 || bWords.size === 0) return false;
-  const overlap = [...aWords].filter(w => bWords.has(w)).length;
-  const similarity = overlap / Math.min(aWords.size, bWords.size);
-  if (similarity < 0.5) return false;
-
-  const aPolarity = comparativePolarity(a);
-  const bPolarity = comparativePolarity(b);
-  if (aPolarity !== 0 && bPolarity !== 0) {
-    return aPolarity !== bPolarity;
-  }
-
-  return hasNegation(a) !== hasNegation(b);
-}
-
-function isMetaClaim(claim: string): boolean {
-  const mentionsApp = META_APP_PATTERN.test(claim);
-  const mentionsProcess = META_PROCESS_PATTERN.test(claim);
-  if (mentionsApp && mentionsProcess) return true;
-  if (/\bfact[- ]?check(ing)?\b/i.test(claim) && /\b(working|broken|slow|lag|issue|bug|checking|processing)\b/i.test(claim)) {
-    return true;
-  }
-  return false;
-}
-
-const claimsSchema = z.object({
-  claims: z.array(z.string()).describe("Array of fact-checkable claims. Empty if none found."),
+const model = process.env.XAI_EXTRACTION_MODEL || "grok-4.3";
+// This installed SDK predates grok-4.3's non-reasoning mode and rejects "none"
+// as a provider option. Set the documented API field at the transport boundary
+// for this model; keep the SDK's structured-output validation and cancellation.
+const extractionProvider = createXai({
+  fetch: (input, init) => {
+    if (model === "grok-4.3" && typeof init?.body === "string") {
+      const body = JSON.parse(init.body);
+      return fetch(input, { ...init, body: JSON.stringify({ ...body, reasoning_effort: "none" }) });
+    }
+    return fetch(input, init);
+  },
 });
 
-function buildSystemPrompt(checkedClaims: string[]): string {
-  const checkedSection = checkedClaims.length > 0
-    ? `
-
-**CRITICAL: DUPLICATE PREVENTION**
-These claims have ALREADY been fact-checked. DO NOT extract them again, even if rephrased:
-${checkedClaims.map(c => `- "${c}"`).join("\n")}
-
-If the transcript repeats or rephrases any of these claims, return EMPTY array.
-"Indigenous Australians get twice as much" = SAME AS = "They receive 2x funding" = DUPLICATE!
-"The Eiffel Tower is 25 meters tall" is NOT the same as "The Eiffel Tower is 25 minutes tall" because the factual payload changed.
-`
-    : "";
-
-  return `Extract NEW fact-checkable claims from transcripts.
-
-EXPLICIT FACT-CHECK REQUESTS (HIGHEST PRIORITY):
-If someone says "fact check that", "is that true", "check if", "verify that", etc:
-- Extract the claim they want checked from context
-- IGNORE the duplicate list - user explicitly wants this checked
-- Mark with prefix "FORCE:" so we know to bypass dedup
-
-EXTRACT:
-- Statistics and numbers
-- Comparisons with specifics
-- Policy/government claims
-- Historical claims
-- General comparisons ("X are bigger than Y") even if broad; add "on average" if needed
-
-HEDGING LANGUAGE - STILL EXTRACT THE CLAIM:
-- "I think X" → extract X as a claim
-- "I've heard that X" → extract X as a claim
-- "Apparently X" → extract X as a claim
-- "Maybe X" → extract X as a claim
-Strip the hedging, keep the factual assertion.
-
-SKIP only (unless explicitly requested):
-- Pure opinions with no factual claim ("we should do better")
-- Future predictions ("it will happen")
-- Truly vague statements (no specifics at all)
-- Meta statements about this app/tool/system or its claim-checking pipeline
-- ANYTHING similar to already-checked claims
-${checkedSection}
-RULES:
-1. Make claims COMPLETE and SELF-CONTAINED
-2. Use context to fill in WHO/WHAT
-3. BAD: "twice as much as white Australians" (missing subject)
-4. GOOD: "Indigenous Australians receive twice as much funding as white Australians per capita"
-5. If a new statement CONTRADICTS a checked claim, extract it as NEW (not a duplicate)
-6. If the number, unit, date, entity, or property changes, extract it as NEW
-
-Return 0-2 NEW claims only. If nothing NEW, return empty array.
-For explicit requests, prefix with "FORCE:" to bypass duplicate check.`;
-}
-
-function getClientIP(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
-  return request.headers.get("x-real-ip") || "unknown";
-}
-
-function hashIP(ip: string): string {
-  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
-}
-
-export async function POST(request: Request) {
-  const ip = hashIP(getClientIP(request));
-
-  try {
-    const body = await request.json();
-
-    // Support both old format (just text) and new format (with context)
-    const newText = body.newText || body.text || "";
-    const recentContext = body.recentContext || "";
-    const checkedClaims: string[] = body.checkedClaims || [];
-    const includeTranscriptDiagnostics =
-      transcriptDiagnosticsEnabled && body.includeTranscriptDiagnostics !== false;
-    const diagnosticSessionId =
-      typeof body.diagnosticSessionId === "string"
-        ? body.diagnosticSessionId.slice(0, 120)
-        : undefined;
-
-    addPipelineBreadcrumb("api.extract.start", {
-      ...transcriptDiagnosticData(newText, includeTranscriptDiagnostics),
-      contextLen: recentContext.length,
-      context: transcriptDiagnosticData(recentContext, includeTranscriptDiagnostics).transcript,
-      checkedClaimCount: checkedClaims.length,
-      diagnosticSessionId,
-    });
-    debug.claims.request(newText, recentContext, checkedClaims);
-
-    if (!newText || typeof newText !== "string") {
-      addPipelineBreadcrumb("api.extract.skip_no_text", {}, "warning");
-      addPipelineLog("api.claim_extraction.skipped", {
-        diagnosticSessionId,
-        route: "/api/extract-claims",
-        reason: "no_text",
-      }, "warn");
-      debug.claims.skip("no text");
-      return Response.json({ claims: [], forcedClaims: [] });
-    }
-
-    // Skip very short text
-    if (newText.trim().length < 10) {
-      addPipelineBreadcrumb(
-        "api.extract.skip_short_text",
-        transcriptDiagnosticData(newText, includeTranscriptDiagnostics)
-      );
-      addPipelineLog("api.claim_extraction.skipped", {
-        diagnosticSessionId,
-        route: "/api/extract-claims",
-        reason: "short_text",
-        inputTextLen: newText.trim().length,
-        inputWordCount: textStats(newText).wordCount,
-        transcript: includeTranscriptDiagnostics
-          ? limitDiagnosticText(newText, 1000)
-          : undefined,
-      });
-      debug.claims.skip("text too short");
-      return Response.json({ claims: [], forcedClaims: [] });
-    }
-
-    // Build prompt with context - combine them so the model sees full conversation
-    let prompt = "";
-    if (recentContext && recentContext.trim()) {
-      // Combine context + new text into one flowing transcript
-      prompt = `TRANSCRIPT (analyze the WHOLE thing, especially the end):\n"${recentContext} ${newText}"\n\nFocus on claims in the recent/final part, but use earlier context to make claims complete.`;
-    } else {
-      prompt = `TRANSCRIPT:\n"${newText}"`;
-    }
-
+export const POST = createExtractionHandler({
+  async extract(input, signal) {
     const result = await generateObject({
-      model: xai("grok-3-fast"),
-      schema: claimsSchema,
-      system: buildSystemPrompt(checkedClaims),
-      prompt,
+      model: extractionProvider(model),
+      schema: extractionSchema,
+      system: EXTRACTION_SYSTEM_PROMPT,
+      prompt: buildExtractionPrompt(input),
+      maxRetries: 0,
+      maxOutputTokens: 2400,
+      abortSignal: signal,
     });
-
-    console.log("[usage:extract-claims]", { model: "grok-3-fast", ...result.usage });
-
-    // Filter valid claims
-    let claims = result.object.claims.filter(
-      (c) => typeof c === "string" && c.trim().length > 10
-    );
-    const modelClaimCount = claims.length;
-    let fallbackUsed = false;
-
-    if (claims.length === 0) {
-      const fallbackClaim = directFactClaimFallback(newText);
-      if (fallbackClaim) {
-        claims = [fallbackClaim];
-        fallbackUsed = true;
-        addPipelineBreadcrumb(
-          "api.extract.fallback_claim",
-          claimDiagnosticData(fallbackClaim, includeTranscriptDiagnostics)
-        );
-      }
-    }
-    const beforeMetaFilterCount = claims.length;
-    claims = claims.filter((claim) => {
-      if (isMetaClaim(claim)) {
-        debug.claims.skip(`meta: "${claim.slice(0, 40)}..."`);
-        return false;
-      }
-      return true;
+    console.log("[usage:extract-claims]", { model, requestId: input.requestId, sequence: input.sequence, ...result.usage });
+    return {
+      pendingFragment: result.object.pendingFragment,
+      candidates: result.object.candidates.map((candidate) => ({
+        claim: candidate.claim,
+        relationship: candidate.relationship,
+        ...(candidate.relatedClaimId ? { relatedClaimId: candidate.relatedClaimId } : {}),
+        ...(candidate.forceCheck ? { forceCheck: true } : {}),
+      })),
+    };
+  },
+  onStart(input) {
+    const includeText = transcriptDiagnosticsEnabled && input.includeTranscriptDiagnostics !== false;
+    addPipelineBreadcrumb("api.extract.start", {
+      ...transcriptDiagnosticData(input.newText, includeText),
+      contextLen: input.recentContext.length,
+      knownClaimCount: input.knownClaims.length,
+      diagnosticSessionId: input.diagnosticSessionId,
+      requestId: input.requestId,
+      sequence: input.sequence,
     });
-    const metaFilteredCount = beforeMetaFilterCount - claims.length;
-
-    // Separate forced claims (explicit user requests) from regular claims
-    const forcedClaims: string[] = [];
-    const regularClaims: string[] = [];
-
-    for (const claim of claims) {
-      if (claim.startsWith("FORCE:")) {
-        // Strip prefix and add to forced list (bypass dedup)
-        forcedClaims.push(claim.replace(/^FORCE:\s*/, ""));
-      } else {
-        regularClaims.push(claim);
-      }
-    }
-
-    // Post-filter: remove regular claims too similar to already-checked ones
-    let filteredRegular = regularClaims;
-    let duplicateFilteredCount = 0;
-    if (checkedClaims.length > 0) {
-      filteredRegular = regularClaims.filter(claim => {
-        const claimLower = normalizeForComparison(claim);
-        // Check for obvious duplicates
-        const isDuplicate = checkedClaims.some(checked => {
-          const checkedLower = normalizeForComparison(checked);
-          if (claimFactsDiffer(claim, checked)) {
-            return false;
-          }
-          if (isLikelyContradiction(claimLower, checkedLower)) {
-            return false;
-          }
-          // Exact or near-exact match
-          if (claimLower.includes(checkedLower) || checkedLower.includes(claimLower)) {
-            return true;
-          }
-          // Word overlap check (>50% shared content words = duplicate)
-          const claimWords = extractContentWords(claimLower);
-          const checkedWords = extractContentWords(checkedLower);
-          if (claimWords.size === 0 || checkedWords.size === 0) return false;
-          const overlap = [...claimWords].filter(w => checkedWords.has(w)).length;
-          const similarity = overlap / Math.min(claimWords.size, checkedWords.size);
-          return similarity > 0.5;
-        });
-        if (isDuplicate) {
-          debug.claims.skip(`duplicate: "${claim.slice(0, 40)}..."`);
-        }
-        return !isDuplicate;
-      });
-      duplicateFilteredCount = regularClaims.length - filteredRegular.length;
-    }
-
-    // Combine forced claims (always included) with filtered regular claims
-    claims = [...forcedClaims, ...filteredRegular];
-
-    console.log("[api:extract-claims]", { ip, claimsFound: claims.length, textLen: newText.length });
-    addPipelineBreadcrumb("api.extract.done", {
-      claimsFound: claims.length,
-      forcedClaimCount: forcedClaims.length,
-      claims: includeTranscriptDiagnostics && claims.length > 0
-        ? limitDiagnosticText(claims.join(" | "), 2000)
-        : undefined,
-      diagnosticSessionId,
-    });
-    addPipelineLog("api.claim_extraction.completed", {
-      diagnosticSessionId,
-      route: "/api/extract-claims",
-      model: "grok-3-fast",
-      inputTextLen: newText.trim().length,
-      inputWordCount: textStats(newText).wordCount,
-      inputHasNumber: textStats(newText).hasNumber,
-      contextLen: recentContext.length,
-      checkedClaimCount: checkedClaims.length,
-      modelClaimCount,
-      fallbackUsed,
-      metaFilteredCount,
-      duplicateFilteredCount,
-      forcedClaimCount: forcedClaims.length,
-      claimCount: claims.length,
-      claims: includeTranscriptDiagnostics && claims.length > 0
-        ? limitDiagnosticText(claims.join(" | "), 2000)
-        : undefined,
-      transcript: includeTranscriptDiagnostics
-        ? limitDiagnosticText(newText, 2000)
-        : undefined,
-      contextTail: includeTranscriptDiagnostics && recentContext
-        ? limitDiagnosticText(recentContext, 2000)
-        : undefined,
-    });
+    debug.claims.request(input.newText, input.recentContext, input.knownClaims.map((item) => item.claim));
+  },
+  onComplete(input, candidates, durationMs) {
+    const includeText = transcriptDiagnosticsEnabled && input.includeTranscriptDiagnostics !== false;
+    const claims = candidates.map((candidate) => candidate.claim);
+    const log = {
+      diagnosticSessionId: input.diagnosticSessionId,
+      requestId: input.requestId,
+      sequence: input.sequence,
+      route: "/api/extract-claims", model, durationMs,
+      inputTextLen: input.newText.length,
+      inputWordCount: textStats(input.newText).wordCount,
+      contextLen: input.recentContext.length,
+      knownClaimCount: input.knownClaims.length,
+      candidateCount: candidates.length,
+      repeatCount: candidates.filter((candidate) => candidate.relationship === "repeat").length,
+      revisionCount: candidates.filter((candidate) => candidate.relationship === "revision").length,
+      forcedClaimCount: candidates.filter((candidate) => candidate.forceCheck).length,
+      claims: includeText ? limitDiagnosticText(claims.join(" | "), 2000) : undefined,
+    };
+    addPipelineBreadcrumb("api.extract.done", log);
+    addPipelineLog("api.claim_extraction.completed", log);
     debug.claims.response(claims);
-
-    return Response.json({ claims, forcedClaims });
-  } catch (error) {
-    capturePipelineError(error, { route: "/api/extract-claims" });
-    debug.claims.skip(`error: ${error}`);
-    return Response.json({ claims: [], forcedClaims: [] });
-  }
-}
+  },
+  onError(error, input, durationMs) {
+    const details = {
+      route: "/api/extract-claims", requestId: input.requestId, sequence: input.sequence,
+      diagnosticSessionId: input.diagnosticSessionId, durationMs,
+    };
+    capturePipelineError(error, details);
+    addPipelineLog("api.claim_extraction.failed", details, "warn");
+    debug.claims.skip("extraction failed; caller may retry this batch");
+  },
+});

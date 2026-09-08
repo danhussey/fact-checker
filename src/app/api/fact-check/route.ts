@@ -1,227 +1,104 @@
-import { xai } from "@ai-sdk/xai";
-import { generateObject } from "ai";
+import crypto from "crypto";
 import { z } from "zod";
 import { debug } from "@/lib/debug";
+import { DEFAULT_FACT_CHECK_MODEL, runGroundedFactCheck } from "@/lib/groundedFactCheck";
+import { FactCheckServiceError } from "@/lib/researchDeadline";
 import {
   addPipelineBreadcrumb,
   addPipelineLog,
   capturePipelineError,
   claimDiagnosticData,
-  limitDiagnosticText,
-  transcriptDiagnosticData,
   transcriptDiagnosticsEnabled,
 } from "@/lib/observability";
-import { normalizeSourceUrl } from "@/lib/sourceUrls";
-import crypto from "crypto";
 
-const factCheckSchema = z.object({
-  verdict: z.enum(["true", "mostly true", "half true", "mostly false", "false", "unverified"]),
-  confidence: z.number().min(1).max(4),
-  whatsTrue: z.array(z.string()).max(2),
-  whatsWrong: z.array(z.string()).max(2),
-  context: z.array(z.string()).max(2),
-  sources: z.array(z.object({
-    name: z.string(),
-    url: z.string().optional(),
-  })).max(3),
-  argument: z.object({
-    claim: z.string().describe("The core claim restated clearly"),
-    grounds: z.array(z.string()).max(3).describe("Evidence supporting the claim"),
-    warrant: z.string().describe("The logical principle: why grounds support claim"),
-    backing: z.string().optional().describe("What supports the warrant itself"),
-    qualifier: z.enum(["certain", "probable", "possible", "uncertain"]),
-    rebuttals: z.array(z.string()).max(2).optional().describe("Conditions that would undermine this"),
-  }).optional(),
+export const maxDuration = 60;
+
+const inputSchema = z.object({
+  claim: z.string().max(2000).optional(),
+  prompt: z.string().max(2000).optional(),
+  context: z.string().max(32000).optional(),
+  includeTranscriptDiagnostics: z.boolean().optional(),
+  diagnosticSessionId: z.string().max(120).optional(),
+  requestId: z.string().max(120).optional(),
+  claimId: z.string().max(120).optional(),
+  revision: z.number().int().nonnegative().optional(),
 });
 
-const systemPrompt = `You are a brutally honest fact-checker. Verify claims against data.
-
-VERDICT SCALE:
-- "true" - Factually accurate
-- "mostly true" - Accurate, minor details off
-- "half true" - Partially accurate, partially wrong
-- "mostly false" - More wrong than right
-- "false" - Factually wrong
-- "unverified" - Cannot find reliable data
-
-CRITICAL RULES:
-1. ANSWER THE ACTUAL CLAIM. If data supports it, it's TRUE.
-2. NO political balance. You're not an editorial board.
-3. If numbers support the claim, it's TRUE. Period.
-4. Put caveats in "context", not your verdict.
-
-RESPONSE FORMAT - BE CONCISE:
-- whatsTrue: Short bullets (max 15 words each). LEAD WITH NUMBERS/STATS.
-- whatsWrong: Short bullets. LEAD WITH NUMBERS/STATS.
-- context: Brief additional facts only.
-
-EXAMPLE BULLET FORMAT:
-✓ "$44k vs $22k per capita (AIHW 2015-16)"
-✓ "Employment: 46.6% vs 59.8% (ABS 2021)"
-✗ "Claim says 2x but adjusted ratio is 1.5:1"
-
-Keep each bullet under 15 words. Numbers first, source in parentheses.
-Do not invent source URLs. Omit source.url if unavailable; never use "N/A".
-
-CONFIDENCE: 4=solid data, 3=good sources, 2=limited data, 1=unclear
-
-ARGUMENT STRUCTURE (Toulmin Model):
-Also analyze the argument's logical structure:
-- claim: Restate the core assertion clearly and precisely
-- grounds: What evidence/data supports this claim? (max 3 points)
-- warrant: What's the logical principle connecting the grounds to the claim?
-- backing: What supports the warrant itself? (optional - only if relevant)
-- qualifier: How certain is this argument? (certain/probable/possible/uncertain)
-- rebuttals: What conditions would undermine this argument? (optional, max 2)
-
-Be direct. No essays. Just facts and numbers.`;
-
-function getClientIP(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
-  return request.headers.get("x-real-ip") || "unknown";
-}
-
-function hashIP(ip: string): string {
-  return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12);
-}
-
-// Sanitize input: strip control characters (except newlines/tabs)
-function sanitizeInput(text: string): string {
-  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
-}
-
 export async function POST(request: Request) {
-  const ip = hashIP(getClientIP(request));
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
+  let claim = "";
+  let diagnosticSessionId: string | undefined;
+  let claimId: string | undefined;
+  let clientRequestId: string | undefined;
+  let revision: number | undefined;
+  let includeTranscriptDiagnostics = false;
+  const trace = () => ({ requestId, clientRequestId, diagnosticSessionId, claimId, revision, route: "/api/fact-check" });
+  const respond = (body: unknown, status = 200, retryAfter?: string) => Response.json(body, {
+    status,
+    headers: { "X-Request-Id": requestId, "Cache-Control": "no-store",
+      ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
+  });
 
   try {
-    const body = await request.json();
-    let claim = body.claim || body.prompt;
-    const context = body.context || "";
-    const includeTranscriptDiagnostics =
-      transcriptDiagnosticsEnabled && body.includeTranscriptDiagnostics !== false;
-    const diagnosticSessionId =
-      typeof body.diagnosticSessionId === "string"
-        ? body.diagnosticSessionId.slice(0, 120)
-        : undefined;
-
-    if (!claim || typeof claim !== "string") {
-      return Response.json(
-        { error: "No claim provided" },
-        { status: 400 }
-      );
-    }
-
-    if (claim.length > 2000) {
-      return Response.json(
-        { error: "Claim too long. Maximum 2000 characters." },
-        { status: 400 }
-      );
-    }
-
-    // Sanitize input
-    claim = sanitizeInput(claim);
-
-    console.log("[api:fact-check]", { ip, claimLen: claim.length, hasContext: !!context });
-    addPipelineBreadcrumb("api.fact_check.start", {
-      ...claimDiagnosticData(claim, includeTranscriptDiagnostics),
-      contextLen: context.length,
-      context: transcriptDiagnosticData(context, includeTranscriptDiagnostics).transcript,
-      diagnosticSessionId,
-    });
-    debug.factCheck.start(claim);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000);
-
-    // Build prompt with optional conversation context
-    let prompt = `Fact-check this claim. Remember: if the data supports the claim, it's TRUE regardless of how you feel about it.\n\nClaim: "${claim}"`;
-
-    if (context && context.trim()) {
-      prompt += `\n\nCONVERSATION CONTEXT (what was said before the claim):\n"${context.slice(-8000)}"`;
-    }
-
+    let rawBody: unknown;
     try {
-      const result = await generateObject({
-        model: xai("grok-3-fast"),
-        schema: factCheckSchema,
-        system: systemPrompt,
-        prompt,
-        abortSignal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-      console.log("[usage:fact-check]", { model: "grok-3-fast", ...result.usage });
-      const factCheck = {
-        ...result.object,
-        sources: result.object.sources.map((source) => ({
-          ...source,
-          url: normalizeSourceUrl(source.url),
-        })),
-      };
-      addPipelineBreadcrumb("api.fact_check.done", {
-        verdict: factCheck.verdict,
-        confidence: factCheck.confidence,
-        sourceCount: factCheck.sources.length,
-        whatsTrueCount: factCheck.whatsTrue.length,
-        whatsWrongCount: factCheck.whatsWrong.length,
-        diagnosticSessionId,
-      });
-      addPipelineLog("api.fact_check.completed", {
-        diagnosticSessionId,
-        route: "/api/fact-check",
-        model: "grok-3-fast",
-        verdict: factCheck.verdict,
-        confidence: factCheck.confidence,
-        sourceCount: factCheck.sources.length,
-        whatsTrueCount: factCheck.whatsTrue.length,
-        whatsWrongCount: factCheck.whatsWrong.length,
-        contextCount: factCheck.context.length,
-        claimLen: claim.length,
-        claim: includeTranscriptDiagnostics
-          ? limitDiagnosticText(claim, 1000)
-          : undefined,
-      });
-      debug.factCheck.done(claim, factCheck);
-
-      return Response.json(factCheck);
-    } catch (abortError) {
-      clearTimeout(timeout);
-      if (controller.signal.aborted) {
-        capturePipelineError(new Error("Fact-check request timed out"), {
-          route: "/api/fact-check",
-          diagnosticSessionId,
-          ...claimDiagnosticData(claim, includeTranscriptDiagnostics),
-        });
-        addPipelineLog("api.fact_check.timeout", {
-          diagnosticSessionId,
-          route: "/api/fact-check",
-          claimLen: claim.length,
-          claim: includeTranscriptDiagnostics
-            ? limitDiagnosticText(claim, 1000)
-            : undefined,
-        }, "warn");
-        debug.factCheck.error(claim, "Request timed out after 45s");
-        return Response.json(
-          {
-            verdict: "unverified",
-            confidence: 1,
-            whatsTrue: [],
-            whatsWrong: [],
-            context: ["Request timed out - try again"],
-            sources: [],
-          }
-        );
-      }
-      throw abortError;
+      rawBody = await request.json();
+    } catch {
+      return respond({ error: "Invalid JSON request", retryable: false }, 400);
     }
-  } catch (error) {
-    capturePipelineError(error, { route: "/api/fact-check" });
-    debug.factCheck.error("unknown", error);
+    const parsed = inputSchema.safeParse(rawBody);
+    if (!parsed.success) return respond({ error: "Invalid fact-check input", retryable: false }, 400);
+    const body = parsed.data;
+    claim = (body.claim || body.prompt || "").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
+    if (!claim) return respond({ error: "No claim provided", retryable: false }, 400);
 
-    return Response.json(
-      { error: "Failed to process fact-check request" },
-      { status: 500 }
-    );
+    diagnosticSessionId = body.diagnosticSessionId;
+    claimId = body.claimId;
+    revision = body.revision;
+    clientRequestId = body.requestId;
+    includeTranscriptDiagnostics = transcriptDiagnosticsEnabled && body.includeTranscriptDiagnostics !== false;
+    const ip = request.headers.get("x-forwarded-for")?.split(",")[0].trim() || request.headers.get("x-real-ip") || "unknown";
+    const model = process.env.XAI_FACT_CHECK_MODEL || DEFAULT_FACT_CHECK_MODEL;
+    console.log("[api:fact-check]", { ...trace(), ip: crypto.createHash("sha256").update(ip).digest("hex").slice(0, 12), claimLen: claim.length, model });
+    addPipelineBreadcrumb("api.fact_check.start", { ...trace(), ...claimDiagnosticData(claim, includeTranscriptDiagnostics), model });
+    if (includeTranscriptDiagnostics) debug.factCheck.start(claim);
+
+    const result = await runGroundedFactCheck({
+      claim,
+      signal: request.signal,
+      model,
+      onStage: (stage) => {
+        console.log("[api:fact-check:stage]", { ...trace(), model, ...stage });
+        addPipelineLog(`api.fact_check.${stage.stage}`, { ...trace(), model, ...stage });
+      },
+    });
+    const completed = { ...trace(), model, durationMs: Date.now() - startedAt, verdict: result.verdict,
+      confidence: result.confidence, sourceCount: result.sources.length,
+      whatsTrueCount: result.whatsTrue.length, whatsWrongCount: result.whatsWrong.length };
+    addPipelineBreadcrumb("api.fact_check.done", completed);
+    addPipelineLog("api.fact_check.completed", completed);
+    if (includeTranscriptDiagnostics) debug.factCheck.done(claim, result);
+    return respond(result);
+  } catch (error) {
+    const serviceError = error instanceof FactCheckServiceError ? error : undefined;
+    const cancelled = serviceError?.code === "cancelled" || request.signal.aborted;
+    const status = cancelled ? 499 : serviceError?.code === "timeout" ? 504 : serviceError?.providerStatus === 429 ? 429 : 503;
+    const providerStatus = serviceError?.providerStatus;
+    const retryable = !cancelled && serviceError?.code !== "not_configured" &&
+      (providerStatus === undefined || providerStatus === 408 || providerStatus === 429 || providerStatus >= 500);
+    const code = cancelled ? "cancelled" : serviceError?.code || "unavailable";
+    const details = { ...trace(), code, durationMs: Date.now() - startedAt, providerStatus: serviceError?.providerStatus };
+    addPipelineLog(`api.fact_check.${code}`, details, cancelled ? "info" : "warn");
+    if (!cancelled) {
+      capturePipelineError(error, { ...details, ...claimDiagnosticData(claim, includeTranscriptDiagnostics) });
+      debug.factCheck.error(includeTranscriptDiagnostics ? claim : "", error);
+    }
+    return respond({
+      error: cancelled ? "Fact-check cancelled" : code === "timeout" ? "Fact-check timed out. Please retry." :
+        code === "not_configured" ? "Live research is not configured." : "Research temporarily unavailable. Please retry.",
+      code,
+      retryable,
+    }, status, retryable ? serviceError?.retryAfter ?? "2" : undefined);
   }
 }

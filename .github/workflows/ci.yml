@@ -25,6 +25,9 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      - name: Pipeline regression tests
+        run: npm test
+
       - name: Lint
         run: npm run lint
 
