@@ -255,7 +255,12 @@ test("production extraction route sends a bounded non-reasoning structured reque
     const response = await POST(request({ newText: "The rate is 35%", knownClaims: [{ id: "rate", claim: "The rate is 3.5%" }] }));
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ candidates: [{ claim: "The rate is 35%", relationship: "new" }], claims: ["The rate is 35%"] });
-    expect(sent[0]).toMatchObject({ model: process.env.XAI_EXTRACTION_MODEL || "grok-4.3", max_completion_tokens: 2400, response_format: { type: "json_schema" } });
+    expect(sent[0]).toMatchObject({ model: process.env.XAI_EXTRACTION_MODEL || "grok-4.3", response_format: { type: "json_schema" } });
+    // xAI SDK releases use either Chat Completions token-limit field.
+    // Require an explicit bound regardless of that wire-format difference.
+    const tokenLimits = [sent[0].max_tokens, sent[0].max_completion_tokens].filter((limit) => limit !== undefined);
+    expect(tokenLimits.length).toBeGreaterThan(0);
+    for (const limit of tokenLimits) expect(limit).toBe(2400);
     if (!process.env.XAI_EXTRACTION_MODEL || process.env.XAI_EXTRACTION_MODEL === "grok-4.3") expect(sent[0].reasoning_effort).toBe("none");
     limited = true;
     const failed = await POST(request({ newText: "The rate is 35%" }));

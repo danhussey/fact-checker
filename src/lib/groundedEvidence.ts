@@ -100,7 +100,14 @@ export function collectEvidence(response: ResearchResponse): EvidenceSource[] {
             passages.push(answer.slice(lineStart, nextNewline < 0 ? answer.length : nextNewline));
           }
         }
-        const excerpt = withoutLinks(passages.join(" ")).slice(0, 1800);
+        const supportingPassages = passages.filter((passage) => {
+          // A bibliography entry may have a long page title but no evidence.
+          // Require prose outside link labels before treating it as a passage.
+          const prose = withoutLinks(passage.replace(/\[\[?[^\]]*\]?\]\(https?:\/\/[^)]+\)/gi, ""))
+            .replace(/\b(?:sources?|references?|see)\b/gi, "");
+          return /\p{L}/u.test(prose);
+        });
+        const excerpt = withoutLinks(supportingPassages.join(" ")).slice(0, 1800);
         if (excerpt.length < 20) continue;
         const existing = sources.get(url);
         if (existing) {
@@ -140,7 +147,8 @@ export function groundAssessment(assessment: GroundedAssessment, catalog: Eviden
     ...(assessment.argument?.grounds ?? [])];
   // Invalid citations invalidate the conclusion instead of hiding its missing evidence.
   if ([...selected].some((id) => !byId.has(id)) ||
-      points.some((point) => !selected.has(point.sourceId) || !byId.has(point.sourceId)) ||
+      points.some((point) => !selected.has(point.sourceId) || !byId.has(point.sourceId) ||
+        !/\p{L}/u.test(withoutLinks(point.text))) ||
       (!assessment.whatsTrue.length && !assessment.whatsWrong.length)) {
     return insufficientEvidence();
   }

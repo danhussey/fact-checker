@@ -95,6 +95,57 @@ test("native browser timers mount and complete concurrent manual checks without 
   expect(errors).toEqual([]);
 });
 
+test("failed research stays visible and manual retry completes the same claim card", async ({ page }) => {
+  let attempts = 0;
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.addInitScript(() => localStorage.setItem("fact-checker:show-text-input", "true"));
+  await page.route("**/api/fact-check", route => {
+    attempts += 1;
+    return attempts === 1
+      ? route.fulfill({ status: 503, json: { error: "Research is temporarily unavailable", retryable: false } })
+      : route.fulfill({ json: verdict("The retry returned grounded evidence.") });
+  });
+  await page.goto("/");
+  const claim = "Cats are mammals";
+  await page.getByTestId("claim-input").fill(claim);
+  await page.getByTestId("claim-submit").click();
+  const card = cardFor(page, claim);
+  await expect(card.getByText("Research is temporarily unavailable")).toBeVisible();
+  await expect(card.getByText("Error", { exact: true })).toBeVisible();
+  expect(attempts).toBe(1);
+  await card.getByRole("button", { name: "Retry check" }).click();
+  await expect(card.getByText("True", { exact: true })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Retry check" })).toHaveCount(0);
+  await expect(cards(page)).toHaveCount(1);
+  await card.getByRole("button", { name: /Cats are mammals/ }).click();
+  await expect(card.getByText("The retry returned grounded evidence.")).toBeVisible();
+  expect(attempts).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test("settings hydrate stored values and persist user changes across reload", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.setItem("fact-checker:show-text-input", "false");
+    localStorage.setItem("fact-checker:show-argument-breakdown", "true");
+  });
+  await page.reload();
+  await expect(page.getByTestId("claim-input")).toHaveCount(0);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("switch", { name: "Text input", exact: true })).not.toBeChecked();
+  await expect(page.getByRole("switch", { name: "Argument structure", exact: true })).toBeChecked();
+  await page.getByRole("switch", { name: "Text input", exact: true }).click();
+  await page.getByRole("switch", { name: "Argument structure", exact: true }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByTestId("claim-input")).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("claim-input")).toBeVisible();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("switch", { name: "Text input", exact: true })).toBeChecked();
+  await expect(page.getByRole("switch", { name: "Argument structure", exact: true })).not.toBeChecked();
+});
+
 async function prepareBrowser(
   page: Page,
   extract: (body: ExtractionRequest, attempt: number) => MockExtraction

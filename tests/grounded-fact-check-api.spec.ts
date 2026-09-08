@@ -74,6 +74,21 @@ test("actual POST distinguishes successful no-evidence search from upstream fail
   expect(calls).toBe(1);
 });
 
+test("actual POST stops before assessment when search returns only a bibliography", async () => {
+  let calls = 0;
+  const title = "NASA Earth Planet Facts and Information";
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({ ...research, output: [research.output[0], {
+      type: "message", content: [{ type: "output_text", text: `Source: [${title}](${url})`, annotations: [{ ...citation, title }] }],
+    }] });
+  };
+  const response = await POST(request());
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ verdict: "unverified", confidence: 1, sources: [] });
+  expect(calls).toBe(1);
+});
+
 test("actual POST does not trust a model that invents citation IDs", async () => {
   let calls = 0;
   globalThis.fetch = async () => Response.json(++calls === 1 ? research : assessmentResponse({
@@ -102,6 +117,17 @@ test("actual POST refuses a response without completed search or with malformed 
   let calls = 0;
   globalThis.fetch = async () => Response.json(++calls === 1 ? research : { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "not JSON" }] }] });
   expect((await POST(request())).status).toBe(503);
+});
+
+test("actual POST rejects incomplete or malformed provider completions without assessment", async () => {
+  for (const body of [{ ...research, status: "incomplete" }, { ...research, status: "failed" }, { status: "completed", output: null }]) {
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return Response.json(body); };
+    const response = await POST(request());
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "unavailable", retryable: true });
+    expect(calls).toBe(1);
+  }
 });
 
 test("actual POST preserves upstream Retry-After seconds or date for queue cooldown", async () => {

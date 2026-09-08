@@ -125,3 +125,64 @@ test("nonretryable provider configuration errors do not start another paid check
   expect(requests).toHaveLength(1);
   expect(checks()[0].status).toBe("failed");
 });
+
+test("rapid corrections run only the latest revision while unrelated research continues", async () => {
+  const { queue, submit, requests, checks } = setup();
+  const id = submit("The tower is 25 meters tall")!;
+  submit("Cats are mammals");
+  for (const [sequence, height] of [[1, 35], [2, 45], [3, 55]]) {
+    queue.submit({ claim: `The tower is ${height} meters tall`, relationship: "revision", relatedClaimId: id }, {
+      context: "A spoken correction", sequence: clock.now + sequence,
+    });
+  }
+  await settle();
+  expect(requests.map(request => request.claim)).toEqual([
+    "The tower is 25 meters tall", "Cats are mammals", "The tower is 55 meters tall",
+  ]);
+  expect(requests[0].signal.aborted).toBe(true);
+  expect(requests[1].signal.aborted).toBe(false);
+  requests[2].result.resolve(verdict);
+  await settle();
+  requests[0].result.resolve({ ...verdict, verdict: "false" });
+  await settle();
+  expect(checks().find(check => check.id === id)).toMatchObject({
+    claim: "The tower is 55 meters tall", status: "done", result: { verdict: "true" },
+  });
+  expect(checks()).toHaveLength(2);
+});
+
+test("exhausted transient retries release the worker and a later mention can recover the claim", async () => {
+  const { queue, submit, requests, checks } = setup();
+  const id = submit("Cats are mammals")!;
+  requests[0].result.reject(new PipelineRequestError("Unavailable", 503));
+  await settle();
+  await clock.advance(1000);
+  expect(requests).toHaveLength(2);
+  requests[1].result.reject(new PipelineRequestError("Still unavailable", 503));
+  await settle();
+  await clock.advance(60_000);
+  expect(requests).toHaveLength(2);
+  expect(queue.snapshot().activeCount).toBe(0);
+  expect(queue.knownClaims()).toEqual([]);
+  expect(checks()[0].status).toBe("failed");
+  expect(submit("Cats are mammals.")).toBe(id);
+  requests[2].result.resolve(verdict);
+  await settle();
+  expect(checks()).toHaveLength(1);
+  expect(checks()[0].status).toBe("done");
+});
+
+test("disposing the session aborts running checks and never starts queued work or accepts late results", async () => {
+  const { queue, submit, requests, checks } = setup();
+  submit("Cats are mammals");
+  submit("Water contains hydrogen");
+  submit("Earth orbits the Sun");
+  const lastPublished = checks();
+  queue.dispose();
+  expect(requests.every(request => request.signal.aborted)).toBe(true);
+  requests.forEach(request => request.result.resolve(verdict));
+  await settle();
+  await clock.advance(60_000);
+  expect(requests).toHaveLength(2);
+  expect(checks()).toBe(lastPublished);
+});

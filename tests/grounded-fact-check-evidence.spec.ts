@@ -27,6 +27,13 @@ test.describe("Grounded evidence", () => {
     expect(supported()).toEqual([{ id: "S1", name: "NASA", url: sourceUrl, excerpt: "Earth orbits the Sun once per year." }]);
   });
 
+  test("a bibliography link is not a supporting research passage", () => {
+    const title = "NASA Earth Planet Facts and Information";
+    const annotations = [{ ...citation, title }];
+    expect(collectEvidence(research(`Sources:\n- [${title}](${sourceUrl})`, annotations))).toEqual([]);
+    expect(collectEvidence(research(`Source: [${title}](${sourceUrl})`, annotations))).toEqual([]);
+  });
+
   test("uses positional citations and excludes uncited surrounding paragraphs", () => {
     const text = "Unsupported claim about Mars.\nEarth orbits the Sun once per year.\nUnsupported claims about Venus.";
     const result = collectEvidence(research(text, [{ ...citation, start_index: 29, end_index: 63 }]));
@@ -72,6 +79,14 @@ test.describe("Grounded evidence", () => {
     value.whatsTrue[0].text = "Earth orbits the Sun [proof](https://invented.example/proof)";
     value.argument!.warrant = "See https://invented.example/claim";
     expect(JSON.stringify(groundAssessment(value, supported()))).not.toContain("invented.example");
+  });
+
+  test("a citation ID cannot make an empty assessment point substantive", () => {
+    for (const text of ["   ", "https://invented.example/proof", "[1](https://invented.example/proof)"]) {
+      const value = assessment();
+      value.whatsTrue[0].text = text;
+      expect(groundAssessment(value, supported()).verdict).toBe("unverified");
+    }
   });
 });
 

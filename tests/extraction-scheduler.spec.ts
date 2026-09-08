@@ -107,3 +107,37 @@ test("an unfinished suffix joins speech received while the previous extraction w
   expect(calls[1].batch.newText).toBe("The tower is 300 meters tall.");
   expect(calls[1].batch.recentContext).toBe("Cats are mammals.");
 });
+
+test("a late timed-out response cannot overwrite the retried batch's continuation", async () => {
+  const { say, calls, scheduler } = setup();
+  say("Cats are mammals. The tower is 300");
+  await clock.advance(450);
+  await clock.advance(8000);
+  await clock.advance(0);
+  expect(calls).toHaveLength(2);
+  calls[1].result.resolve({ pendingFragment: "The tower is 300" });
+  await settle();
+  calls[0].result.resolve({ pendingFragment: "300" });
+  await settle();
+  expect(scheduler.snapshot().pendingText).toBe("The tower is 300");
+  say("meters tall.");
+  await clock.advance(2100);
+  expect(calls[2].batch.newText).toBe("The tower is 300 meters tall.");
+  expect(calls[2].batch.recentContext).toBe("Cats are mammals.");
+});
+
+test("disposing the session drops scheduled retries and ignores late extraction completion", async () => {
+  const { say, calls, scheduler, state } = setup();
+  say("Cats are mammals.");
+  await clock.advance(120);
+  say("Water contains hydrogen.");
+  const lastPublished = state();
+  scheduler.dispose();
+  expect(calls[0].signal.aborted).toBe(true);
+  calls[0].result.resolve({ pendingFragment: "Cats are mammals." });
+  await settle();
+  await clock.advance(60_000);
+  expect(calls).toHaveLength(1);
+  expect(state()).toBe(lastPublished);
+  expect(scheduler.snapshot().pendingText).toBe("Water contains hydrogen.");
+});
